@@ -381,7 +381,12 @@ static void blit_art(const gv_art *art, int ox, int oy, int *out_w, int *out_h) 
     *out_h = h;
 }
 
-bool gv_sprite_init(SDL_Renderer *ren) {
+// Painting the art into s_pixels needs no renderer, which is what lets the
+// window icon be built before there is one.
+static bool s_baked;
+
+static bool bake_atlas(void) {
+    if (s_baked) return true;
     SDL_memset(s_pixels, 0, sizeof s_pixels);
 
     for (int i = 0; i < GV_SPR_COUNT; i++) {
@@ -400,6 +405,55 @@ bool gv_sprite_init(SDL_Renderer *ren) {
         }
         s_rects[i] = (SDL_FRect){ (float)cx, (float)cy, (float)w, (float)h };
     }
+    s_baked = true;
+    return true;
+}
+
+// The window icon, drawn from the same art as the ship you fly. Scaled with
+// whole-pixel blocks rather than by the compositor, so it stays pixel art
+// instead of turning into a 16px smudge, and centred in a square cell because
+// that is the shape every desktop expects.
+SDL_Surface *gv_sprite_icon(int scale) {
+    if (!bake_atlas()) return nullptr;
+    if (scale < 1) scale = 1;
+
+    const int side = GV_ATLAS_CELL * scale;
+    SDL_Surface *icon = SDL_CreateSurface(side, side, SDL_PIXELFORMAT_RGBA32);
+    if (!icon) return nullptr;
+
+    const SDL_FRect *r = &s_rects[GV_SPR_PLAYER];
+    const int sw = (int)r->w, sh = (int)r->h;
+    const int ox = (GV_ATLAS_CELL - sw) / 2, oy = (GV_ATLAS_CELL - sh) / 2;
+
+    SDL_ClearSurface(icon, 0, 0, 0, 0);
+    if (!SDL_LockSurface(icon)) { SDL_DestroySurface(icon); return nullptr; }
+
+    for (int y = 0; y < sh; y++) {
+        for (int x = 0; x < sw; x++) {
+            const uint8_t *src =
+                &s_pixels[(((size_t)(int)r->y + (size_t)y) * ATLAS_W +
+                           ((size_t)(int)r->x + (size_t)x)) * 4];
+            if (!src[3]) continue;   // leave transparent pixels alone
+
+            for (int by = 0; by < scale; by++) {
+                uint8_t *row = (uint8_t *)icon->pixels
+                             + (size_t)((oy + y) * scale + by) * (size_t)icon->pitch
+                             + (size_t)((ox + x) * scale) * 4;
+                for (int bx = 0; bx < scale; bx++) {
+                    row[bx * 4 + 0] = src[0];
+                    row[bx * 4 + 1] = src[1];
+                    row[bx * 4 + 2] = src[2];
+                    row[bx * 4 + 3] = src[3];
+                }
+            }
+        }
+    }
+    SDL_UnlockSurface(icon);
+    return icon;
+}
+
+bool gv_sprite_init(SDL_Renderer *ren) {
+    if (!bake_atlas()) return false;
 
     s_atlas = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
                                 SDL_TEXTUREACCESS_STATIC, ATLAS_W, ATLAS_H);

@@ -16,6 +16,7 @@
 #include "gv_render.h"
 #include "gv_debug.h"
 #include "gv_font.h"
+#include "gv_sprite.h"
 #include "gv_audio.h"
 #include "gv_score.h"
 #include "gv_window.h"
@@ -74,6 +75,10 @@ typedef struct {
     uint16_t    start_path;
     uint32_t    seed;
     bool        seed_set;
+
+    // Borderless fullscreen, and the windowed geometry to come back to.
+    bool     faux_fs;
+    int      pre_fs_x, pre_fs_y, pre_fs_w, pre_fs_h;
 
     bool     pad_rumbles;   // the pad reports rumble support
     bool     no_rumble;     // --no-rumble
@@ -148,6 +153,76 @@ static void trace_tick(gv_app *app) {
     }
 }
 
+// The title bar and the taskbar get the ship you fly, drawn from the same
+// procedural art as the game. Purely cosmetic, so a failure is not worth
+// mentioning to the player - the window simply keeps the default icon.
+static void set_window_icon(SDL_Window *win) {
+    if (!win) return;
+
+    // 32px is the size most desktops reach for, and it is an exact 2x of the
+    // 16px art so it stays crisp. The alternates are for Windows and macOS: on
+    // X11, SDL writes only the base surface into _NET_WM_ICON.
+    //
+    // Note this does nothing under WSLg, whose window manager draws its own
+    // generic glyph and ignores the icon entirely - see the README.
+    static const int SCALES[] = { 2, 1, 3, 4 };   // 32, 16, 48 and 64 px
+    SDL_Surface *icons[GV_COUNTOF(SCALES)] = { nullptr };
+
+    icons[0] = gv_sprite_icon(SCALES[0]);
+    if (!icons[0]) return;
+
+    for (size_t i = 1; i < GV_COUNTOF(SCALES); i++) {
+        icons[i] = gv_sprite_icon(SCALES[i]);
+        if (icons[i]) SDL_AddSurfaceAlternateImage(icons[0], icons[i]);
+    }
+
+    SDL_SetWindowIcon(win, icons[0]);
+    for (size_t i = 0; i < GV_COUNTOF(SCALES); i++)
+        if (icons[i]) SDL_DestroySurface(icons[i]);
+}
+
+// Fullscreen, the long way round.
+//
+// SDL_SetWindowFullscreen is the obvious call and it does not work under WSLg:
+// the real window becomes the size of the display, SDL is never told, and the
+// renderer goes on drawing at the old size - which lands the playfield in a
+// corner of the screen. SDL_SetWindowSize cannot rescue it either, because a
+// fullscreen window ignores resizes. Measured: display 2560x1600, SDL still
+// reporting 672x864 afterwards.
+//
+// A borderless window stretched over the display avoids the whole problem. We
+// set the size ourselves, so SDL knows it, so the renderer is right - and on a
+// desktop that handles fullscreen properly this looks the same to the player.
+static void toggle_fullscreen(gv_app *app) {
+    if (!app->win) return;
+
+    if (app->faux_fs) {
+        SDL_SetWindowBordered(app->win, true);
+        SDL_SetWindowSize(app->win, app->pre_fs_w, app->pre_fs_h);
+        SDL_SetWindowPosition(app->win, app->pre_fs_x, app->pre_fs_y);
+        app->faux_fs = false;
+    } else {
+        SDL_Rect b;
+        const SDL_DisplayID id = SDL_GetDisplayForWindow(app->win);
+        if (!id || !SDL_GetDisplayBounds(id, &b)) return;
+
+        SDL_GetWindowPosition(app->win, &app->pre_fs_x, &app->pre_fs_y);
+        SDL_GetWindowSize(app->win, &app->pre_fs_w, &app->pre_fs_h);
+
+        SDL_SetWindowBordered(app->win, false);
+        SDL_SetWindowPosition(app->win, b.x, b.y);
+        SDL_SetWindowSize(app->win, b.w, b.h);
+        app->faux_fs = true;
+    }
+
+    if (app->trace) {
+        int w = 0, h = 0;
+        SDL_GetWindowSizeInPixels(app->win, &w, &h);
+        SDL_Log("gavaga: fullscreen %s, SDL now sees %dx%d",
+                app->faux_fs ? "on" : "off", w, h);
+    }
+}
+
 // --- rumble ---------------------------------------------------------------
 // The simulation already hands its effects out as data, so the pad reads the
 // same queue the synth does and nothing in gv_game.c has to know a pad exists.
@@ -191,6 +266,13 @@ static void drain_events(gv_app *app) {
     for (int i = 0; i < g->sfx_n; i++) gv_audio_play(g->sfx[i]);
     pad_rumble(app);
     g->sfx_n = 0;
+
+    // The bed follows the mode, and gets busier as the stages climb.
+    // gv_audio_set_music ignores a repeat of the level it is already at, so
+    // calling it every tick costs nothing and never restarts the bar.
+    gv_audio_set_music(g->mode == GV_MODE_PLAY
+                       ? gv_clampi(1 + (g->stage - 1) / 3, 1, 4)
+                       : GV_MUSIC_OFF);
 
     if (g->want_save_high) {
         g->want_save_high = false;
@@ -277,6 +359,7 @@ static void debug_window_open(gv_app *app) {
         app->game->debug = false;
         return;
     }
+    set_window_icon(app->dbg_win);
     SDL_SetRenderVSync(app->dbg_ren, 1);
     SDL_SetRenderLogicalPresentation(app->dbg_ren, GV_DBG_W, GV_DBG_H,
                                      SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
@@ -373,6 +456,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
                                 &app->win_state);
     if (app->win && app->scale > 0)
         SDL_SetWindowSize(app->win, GV_SCREEN_W * scale, GV_SCREEN_H * scale);
+
+    // Before the renderer: SDL's X11 backend is reported to drop the icon if it
+    // arrives after one exists.
+    set_window_icon(app->win);
 
     if (!app->win || !(app->ren = SDL_CreateRenderer(app->win, nullptr))) {
         SDL_Log("gavaga: could not create window/renderer: %s", SDL_GetError());
@@ -537,8 +624,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         case SDL_SCANCODE_ESCAPE:
             return SDL_APP_SUCCESS;
         case SDL_SCANCODE_F11:
-            SDL_SetWindowFullscreen(app->win,
-                (SDL_GetWindowFlags(app->win) & SDL_WINDOW_FULLSCREEN) == 0);
+            toggle_fullscreen(app);
             break;
         case SDL_SCANCODE_M:
             gv_audio_set_muted(!gv_audio_muted());
@@ -546,8 +632,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         case SDL_SCANCODE_RETURN:
         case SDL_SCANCODE_KP_ENTER:
             if (event->key.mod & SDL_KMOD_ALT)
-                SDL_SetWindowFullscreen(app->win,
-                    (SDL_GetWindowFlags(app->win) & SDL_WINDOW_FULLSCREEN) == 0);
+                toggle_fullscreen(app);
             else
                 app->edge_start = true;
             break;
@@ -720,6 +805,17 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 
     // Not for --shot: that run's window is a capture buffer, not a place the
     // player put anything.
+    // Borderless fullscreen is a view, not a place the player put the window.
+    // Put the windowed geometry back before it gets written out, or the next
+    // run opens the size of a monitor.
+    if (app->faux_fs && app->win) {
+        SDL_SetWindowBordered(app->win, true);
+        SDL_SetWindowSize(app->win, app->pre_fs_w, app->pre_fs_h);
+        SDL_SetWindowPosition(app->win, app->pre_fs_x, app->pre_fs_y);
+        SDL_SyncWindow(app->win);
+        app->faux_fs = false;
+    }
+
     if (!app->shot_path) {
         if (app->trace && app->win) {
             int x = 0, y = 0;

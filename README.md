@@ -337,6 +337,26 @@ back off before saving. It is learned from the first window-move event, because
 actually been placed. A window manager that honours the request exactly sends
 no such event and the whole correction stays zero.
 
+**The window has no icon (WSLg).** The icon is built from the same art as the
+ship you fly and handed over with `SDL_SetWindowIcon`. WSLg's window manager
+draws its own generic glyph and ignores it. Verified by reading `_NET_WM_ICON`
+back off the window — the image is there and correct — and by trying 16, 32 and
+64px icons, setting it before the renderer exists, and setting the older ICCCM
+`WM_HINTS` pixmap by hand. All four made no difference, so this is
+[microsoft/wslg#614](https://github.com/microsoft/wslg/issues/614) and not
+something the game can fix. Real X11 and Wayland desktops, Windows and macOS
+are unaffected.
+
+**Fullscreen (F11) is a borderless window, not real fullscreen.** Deliberately.
+`SDL_SetWindowFullscreen` is broken under WSLg: the window becomes the size of
+the display, SDL is never told, and the renderer keeps drawing at the old size,
+which leaves the playfield in a corner of the screen. Measured — display
+2560×1600 with SDL still reporting 672×864 afterwards — and unfixable from the
+application, because a fullscreen window ignores `SDL_SetWindowSize` too.
+Sizing a borderless window over the display sidesteps it: the size is one we set
+ourselves, so SDL knows it and the renderer is right. On a desktop that handles
+fullscreen properly this looks the same to the player.
+
 **No sound.** The attract screen is silent on purpose — press Enter to start a
 game and you should get a four-note stage jingle immediately. If a *game* is
 silent, check the startup log, which names the driver it actually opened:

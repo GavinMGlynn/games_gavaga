@@ -33,6 +33,10 @@ enum {
 bool gv_sprite_init(SDL_Renderer *ren);
 void gv_sprite_quit(void);
 
+// A window icon built from the player sprite. Needs no renderer, so it can be
+// set as soon as the window exists. Caller owns the surface.
+SDL_Surface     *gv_sprite_icon(int scale);
+
 SDL_Texture     *gv_sprite_texture(void);
 const SDL_FRect *gv_sprite_rect(int id);   // source rect within the atlas
 

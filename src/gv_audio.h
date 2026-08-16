@@ -16,4 +16,12 @@ void gv_audio_set_muted(bool muted);
 bool gv_audio_muted(void);
 bool gv_audio_ok(void);
 
+// The music bed. 0 is silence; 1 and up pick up the tempo and open the filter,
+// so later stages sound busier without needing a second tune. Safe to call
+// every frame - setting the level it is already at does nothing, so the bed
+// does not restart.
+#define GV_MUSIC_OFF 0
+void gv_audio_set_music(int level);
+int  gv_audio_music(void);
+
 #endif // GV_AUDIO_H
