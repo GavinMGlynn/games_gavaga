@@ -202,7 +202,7 @@ yours is too old.
 
 | | minimum | note |
 |---|---|---|
-| GCC | 14 | Ubuntu 22.04 and RHEL 9 ship GCC 11 — too old |
+| GCC | 14 | Ubuntu 22.04 and RHEL 9 ship GCC 11 — too old; RHEL 10 ships 14 |
 | Clang | 19 | |
 | AppleClang | 16 | Xcode 16 |
 | MSVC | 19.39 | VS 2022 17.9 |
@@ -236,16 +236,37 @@ sudo apt install build-essential git cmake ninja-build \
 sudo apt install gcc-14 && cmake -B build -DCMAKE_C_COMPILER=gcc-14
 ```
 
-**RHEL 9 / Rocky 9** — the default GCC is 11, so use the toolset:
+**RHEL 10 / Rocky 10** — the default GCC is 14, so no toolset is needed. Note
+`--enablerepo=crb`: `libdecor-devel` lives in CodeReady Builder, and without it
+dnf just reports no match, which reads like a typo rather than a disabled repo.
 
 ```sh
-sudo dnf install gcc-toolset-14 cmake ninja-build git \
+sudo dnf install --enablerepo=crb cmake ninja-build git gcc \
     libX11-devel libXext-devel libXrandr-devel libXi-devel libXcursor-devel \
-    wayland-devel libxkbcommon-devel libdecor-devel mesa-libGL-devel \
-    mesa-libEGL-devel pulseaudio-libs-devel alsa-lib-devel dbus-devel \
-    systemd-devel
+    wayland-devel wayland-protocols-devel libxkbcommon-devel libdecor-devel \
+    mesa-libGL-devel mesa-libEGL-devel pulseaudio-libs-devel alsa-lib-devel \
+    dbus-devel systemd-devel
+cmake -B build && cmake --build build -j
+```
+
+**RHEL 9 / Rocky 9** — same packages, but the default GCC is 11, so use the
+toolset:
+
+```sh
+sudo dnf install --enablerepo=crb gcc-toolset-14 cmake ninja-build git \
+    libX11-devel libXext-devel libXrandr-devel libXi-devel libXcursor-devel \
+    wayland-devel wayland-protocols-devel libxkbcommon-devel libdecor-devel \
+    mesa-libGL-devel mesa-libEGL-devel pulseaudio-libs-devel alsa-lib-devel \
+    dbus-devel systemd-devel
 scl enable gcc-toolset-14 -- cmake -B build
 scl enable gcc-toolset-14 -- cmake --build build -j
+```
+
+If the X11 and Wayland development headers are missing, the failure comes from
+SDL's own configure step rather than from anything in this project:
+
+```
+SDL could not find X11 or Wayland development libraries on your system.
 ```
 
 **macOS (Apple Silicon)** — Xcode 16 or newer, plus CMake.
