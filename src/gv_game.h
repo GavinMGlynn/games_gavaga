@@ -18,7 +18,8 @@
 #define GV_MAX_GROUPS  8    // launch groups per stage
 
 // --- formation ------------------------------------------------------------
-// 5 rows: 4 flagships, 2 rows of 8 guards, 2 rows of 10 grunts.
+// 5 rows, one kind each: 4 flagships, 8 guards, 8 sentinels, 10 grunts,
+// 10 darters.
 #define GV_FORM_SLOTS 40
 #define GV_FORM_COLS  10
 #define GV_FORM_ROWS  5
@@ -36,7 +37,16 @@
 
 #define GV_DUAL_OFFSET   8     // px from centre to each hull of a dual fighter
 
-enum { GV_EK_GRUNT = 0, GV_EK_GUARD, GV_EK_FLAGSHIP, GV_EK_COUNT };
+// Kind ids are stored in save-agnostic state only, but GV_EK_FLAGSHIP is
+// compared against by name all over gv_game.c, so new kinds go on the end.
+enum {
+    GV_EK_GRUNT = 0,
+    GV_EK_GUARD,
+    GV_EK_FLAGSHIP,
+    GV_EK_SENTINEL,   // wide cruiser: slow to fire, but a three-shot fan
+    GV_EK_DARTER,     // slim and quick: dives hard and shoots often, dies easily
+    GV_EK_COUNT
+};
 
 enum {
     GV_ES_FREE = 0,  // slot unused

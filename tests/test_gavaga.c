@@ -222,9 +222,17 @@ static void test_formation(void) {
         CHECK(g->slot_kind[s] < GV_EK_COUNT, "slot %d has a bad kind", s);
         kinds[g->slot_kind[s]]++;
     }
+    // One row each: 4 flagships, 8 guards, 8 sentinels, 10 grunts, 10 darters.
     CHECK(kinds[GV_EK_FLAGSHIP] == 4,  "flagship slots: %d", kinds[GV_EK_FLAGSHIP]);
-    CHECK(kinds[GV_EK_GUARD]    == 16, "guard slots: %d",    kinds[GV_EK_GUARD]);
-    CHECK(kinds[GV_EK_GRUNT]    == 20, "grunt slots: %d",    kinds[GV_EK_GRUNT]);
+    CHECK(kinds[GV_EK_GUARD]    == 8,  "guard slots: %d",    kinds[GV_EK_GUARD]);
+    CHECK(kinds[GV_EK_SENTINEL] == 8,  "sentinel slots: %d", kinds[GV_EK_SENTINEL]);
+    CHECK(kinds[GV_EK_GRUNT]    == 10, "grunt slots: %d",    kinds[GV_EK_GRUNT]);
+    CHECK(kinds[GV_EK_DARTER]   == 10, "darter slots: %d",   kinds[GV_EK_DARTER]);
+
+    int total = 0;
+    for (int k = 0; k < GV_EK_COUNT; k++) total += kinds[k];
+    CHECK(total == GV_FORM_SLOTS, "%d slots filled, formation has %d",
+          total, GV_FORM_SLOTS);
 
     // Every slot must stay on screen through the whole sway/breathe cycle,
     // sprite width included - this is what catches a spacing change that

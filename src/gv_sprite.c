@@ -168,6 +168,86 @@ static const char *const ART_FLAGSHIP_B[] = {
     nullptr
 };
 
+static const char *const ART_SENTINEL_A[] = {
+    "................",
+    "................",
+    "......8888......",
+    ".....898898.....",
+    "....89988998....",
+    "...8999889998...",
+    "..899998899998..",
+    ".89999988999998.",
+    ".89919988991998.",
+    ".89919988991998.",
+    "..899998899998..",
+    "...8999889998...",
+    "....89988998....",
+    ".....898898.....",
+    "......8888......",
+    "................",
+    nullptr
+};
+
+static const char *const ART_SENTINEL_B[] = {
+    "................",
+    "......8888......",
+    ".....898898.....",
+    "....89988998....",
+    "...8999889998...",
+    "..899998899998..",
+    ".89999988999998.",
+    "8899199889919988",
+    "8899199889919988",
+    ".89999988999998.",
+    "..899998899998..",
+    "...8999889998...",
+    "....89988998....",
+    ".....898898.....",
+    "......8888......",
+    "................",
+    nullptr
+};
+
+static const char *const ART_DARTER_A[] = {
+    "................",
+    "......aaaa......",
+    ".....abbbba.....",
+    ".....abbbba.....",
+    "....aab11baa....",
+    "...aabb11bbaa...",
+    "..aabbb11bbbaa..",
+    ".aabbbb11bbbbaa.",
+    ".abbbbb11bbbbba.",
+    "..abbbb11bbbba..",
+    "...abbb11bbba...",
+    "....aab11baa....",
+    ".....ab11ba.....",
+    "......aaaa......",
+    "................",
+    "................",
+    nullptr
+};
+
+static const char *const ART_DARTER_B[] = {
+    "................",
+    "................",
+    "......aaaa......",
+    ".....abbbba.....",
+    "....aabbbbaa....",
+    "...aabb11bbaa...",
+    "..aabbb11bbbaa..",
+    ".aabbbb11bbbbaa.",
+    ".abbbbb11bbbbba.",
+    "..abbbb11bbbba..",
+    "...abbb11bbba...",
+    "....aab11baa....",
+    ".....ab11ba.....",
+    "......aaaa......",
+    "................",
+    "................",
+    nullptr
+};
+
 static const char *const ART_PSHOT[] = {
     ".11.",
     ".11.",
@@ -328,6 +408,10 @@ static const gv_art ART[GV_SPR_COUNT] = {
     // grey for five, gold for ten.
     [GV_SPR_BADGE5]          = { ART_BADGE,       "8d3e" },
     [GV_SPR_BADGE10]         = { ART_BADGE,       "8637" },
+    [GV_SPR_SENTINEL_A]      = { ART_SENTINEL_A,  nullptr },
+    [GV_SPR_SENTINEL_B]      = { ART_SENTINEL_B,  nullptr },
+    [GV_SPR_DARTER_A]        = { ART_DARTER_A,    nullptr },
+    [GV_SPR_DARTER_B]        = { ART_DARTER_B,    nullptr },
 };
 
 // --- baking ---------------------------------------------------------------

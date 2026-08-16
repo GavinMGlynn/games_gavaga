@@ -430,12 +430,22 @@ something if it passes on more than one machine.
 
 ## Where to go next
 
-- **A proper mixer** — the synth is deliberately tiny, with no filters,
-  reverb, or music bed.
-- **Rumble** on the gamepad; SDL3 has it, nothing uses it.
-- **More enemy kinds** beyond the three, and per-kind attack behaviour.
-- **Replays**, which the deterministic core makes almost free: record the
-  seed and the input bits, play them back.
+The four items that used to live here — a proper mixer, gamepad rumble, more
+enemy kinds, and replays — are all in. What is left is mostly judgement rather
+than code:
+
+- **Balance.** Five kinds with their own habits roughly doubled the enemy fire
+  in a soak run (1703 → 3207 shots over 200k ticks), and the sideways-shot fix
+  before it made the bottom of the screen safer. Neither has been played
+  properly. `KIND_FIRE_PCT`, `KIND_DIVE_PCT` and `KIND_SHOTS` in `gv_game.c` are
+  the dials.
+- **The gamepad has never seen real hardware.** The code is there and the pad is
+  queried for rumble support, but no controller has been plugged into this.
+- **Stereo.** The mixer is still mono; panning effects by where they happen on
+  screen would want the sound queue to carry a position, which today it does
+  not.
+- **Real art.** Everything is procedural ASCII in `gv_sprite.c`, by design, but
+  the atlas is ready for a PNG loader whenever there is something to load.
 
 ## Contributing
 

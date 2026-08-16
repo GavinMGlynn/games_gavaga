@@ -24,6 +24,8 @@ enum {
     GV_SPR_BADGE,      // one stage
     GV_SPR_BADGE5,     // five stages
     GV_SPR_BADGE10,    // ten stages
+    GV_SPR_SENTINEL_A, GV_SPR_SENTINEL_B,   // wide cruiser: fires a spread
+    GV_SPR_DARTER_A,   GV_SPR_DARTER_B,     // slim and fast, dives hard
     GV_SPR_COUNT
 };
 

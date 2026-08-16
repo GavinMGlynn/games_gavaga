@@ -43,10 +43,26 @@
 #define EXTRA_EVERY      60000u
 #define MAX_LIVES        9
 
-static const int      KIND_HALF[GV_EK_COUNT]  = { 6, 6, 7 };
-static const uint8_t  KIND_HP[GV_EK_COUNT]    = { 1, 1, 2 };
-static const uint32_t SCORE_FORM[GV_EK_COUNT] = {  50,  80, 150 };
-static const uint32_t SCORE_DIVE[GV_EK_COUNT] = { 100, 160, 400 };
+//                                          grunt guard flag sentinel darter
+static const int      KIND_HALF[GV_EK_COUNT]  = {   6,   6,   7,   7,   5 };
+static const uint8_t  KIND_HP[GV_EK_COUNT]    = {   1,   1,   2,   2,   1 };
+static const uint32_t SCORE_FORM[GV_EK_COUNT] = {  50,  80, 150, 120,  70 };
+static const uint32_t SCORE_DIVE[GV_EK_COUNT] = { 100, 160, 400, 240, 200 };
+
+// --- how each kind attacks -------------------------------------------------
+// The three original kinds differed only in how much damage they took and what
+// they were worth; every diver flew and fired identically. These give each kind
+// a habit, so which row is coming at you actually matters.
+//
+// The sentinel is the trade the fan makes interesting: it fires rarely, but
+// when it does you cannot simply sidestep. The darter is the opposite - fragile
+// and predictable one at a time, dangerous because it is quick and persistent.
+static const uint8_t  KIND_SHOTS[GV_EK_COUNT] = {   1,   1,   1,   3,   1 };
+static const uint8_t  KIND_FIRE_PCT[GV_EK_COUNT] = { 100, 100, 110,  60, 145 };
+static const uint8_t  KIND_DIVE_PCT[GV_EK_COUNT] = { 100, 108,  94, 100, 132 };
+
+// Angle between neighbouring shots in a fan.
+#define ESHOT_FAN GV_ANG_DEG(15)
 
 #define PLAYER_HALF_X 6
 #define PLAYER_HALF_Y 6
@@ -171,16 +187,26 @@ static void init_slots(gv_game *g) {
         g->slot_col[s] = (uint8_t)c; g->slot_row[s] = 0;
         g->slot_kind[s] = GV_EK_FLAGSHIP; s++;
     }
-    for (int r = 1; r <= 2; r++)
-        for (int c = 1; c <= 8; c++) {
-            g->slot_col[s] = (uint8_t)c; g->slot_row[s] = (uint8_t)r;
-            g->slot_kind[s] = GV_EK_GUARD; s++;
-        }
-    for (int r = 3; r <= 4; r++)
-        for (int c = 0; c <= 9; c++) {
-            g->slot_col[s] = (uint8_t)c; g->slot_row[s] = (uint8_t)r;
-            g->slot_kind[s] = GV_EK_GRUNT; s++;
-        }
+    // Row 1 guards, row 2 sentinels, row 3 grunts, row 4 darters. Same forty
+    // slots as before: the two new kinds take a row each rather than making the
+    // formation bigger, so the shape of a stage is unchanged and only what
+    // comes out of it differs.
+    for (int c = 1; c <= 8; c++) {
+        g->slot_col[s] = (uint8_t)c; g->slot_row[s] = 1;
+        g->slot_kind[s] = GV_EK_GUARD; s++;
+    }
+    for (int c = 1; c <= 8; c++) {
+        g->slot_col[s] = (uint8_t)c; g->slot_row[s] = 2;
+        g->slot_kind[s] = GV_EK_SENTINEL; s++;
+    }
+    for (int c = 0; c <= 9; c++) {
+        g->slot_col[s] = (uint8_t)c; g->slot_row[s] = 3;
+        g->slot_kind[s] = GV_EK_GRUNT; s++;
+    }
+    for (int c = 0; c <= 9; c++) {
+        g->slot_col[s] = (uint8_t)c; g->slot_row[s] = 4;
+        g->slot_kind[s] = GV_EK_DARTER; s++;
+    }
     SDL_assert(s == GV_FORM_SLOTS);
 }
 
@@ -408,7 +434,8 @@ static void enemy_start_dive(gv_game *g, int i) {
 
     g->en.state[i]   = GV_ES_DIVE;
     g->en.ang[i]     = GV_ANG_180;
-    g->en.spd[i]     = stage_dive_speed(g);
+    g->en.spd[i]     = gv_fmul(stage_dive_speed(g),
+                               gv_fix(KIND_DIVE_PCT[g->en.kind[i]]) / 100);
     g->en.fire_cd[i] = 30;
     gv_path_start(&g->en.path[i], path, mirror);
     g->divers++;
@@ -429,17 +456,28 @@ static void enemy_fire(gv_game *g, int i) {
     // shot inside a cone about straight down: it still leads the player, but a
     // wide angle becomes a near miss rather than a horizontal streak.
     ang_t dir = gv_dir(g->player.x - g->en.x[i], dy);
-    const int32_t yaw = gv_angdiff(GV_ANG_180, dir);
-    if (yaw >  (int32_t)ESHOT_MAX_YAW) dir = (ang_t)(GV_ANG_180 + ESHOT_MAX_YAW);
-    if (yaw < -(int32_t)ESHOT_MAX_YAW) dir = (ang_t)(GV_ANG_180 - ESHOT_MAX_YAW);
 
-    const int s = eshot_alloc(&g->es);
-    if (s < 0) return;
+    // A fan is centred on the aim, so the middle shot of an odd-numbered volley
+    // is still the aimed one and the outriders are the part you have to read.
+    const int n = KIND_SHOTS[g->en.kind[i]];
+    for (int k = 0; k < n; k++) {
+        const int32_t off = (2 * k - (n - 1)) * (int32_t)ESHOT_FAN / 2;
+        ang_t d = (ang_t)(dir + (ang_t)off);
 
-    g->es.x[s]  = g->en.x[i];
-    g->es.y[s]  = g->en.y[i];
-    g->es.vx[s] = gv_vx(dir, ESHOT_SPEED);
-    g->es.vy[s] = gv_vy(dir, ESHOT_SPEED);
+        // Clamp after the fan, not before: an outrider must not be the thing
+        // that sneaks a sideways shot past the cone.
+        const int32_t yaw = gv_angdiff(GV_ANG_180, d);
+        if (yaw >  (int32_t)ESHOT_MAX_YAW) d = (ang_t)(GV_ANG_180 + ESHOT_MAX_YAW);
+        if (yaw < -(int32_t)ESHOT_MAX_YAW) d = (ang_t)(GV_ANG_180 - ESHOT_MAX_YAW);
+
+        const int s = eshot_alloc(&g->es);
+        if (s < 0) return;          // pool full: drop the rest of the volley
+
+        g->es.x[s]  = g->en.x[i];
+        g->es.y[s]  = g->en.y[i];
+        g->es.vx[s] = gv_vx(d, ESHOT_SPEED);
+        g->es.vy[s] = gv_vy(d, ESHOT_SPEED);
+    }
 }
 
 // --- tractor beam ---------------------------------------------------------
@@ -666,7 +704,8 @@ static void enemies_tick(gv_game *g) {
 
             if (st == GV_ES_DIVE) {
                 if (g->en.fire_cd[i] > 0) g->en.fire_cd[i]--;
-                else if (gv_rng_below(&g->rng, 128) < stage_fire_chance(g)) {
+                else if (gv_rng_below(&g->rng, 128) <
+                         stage_fire_chance(g) * KIND_FIRE_PCT[g->en.kind[i]] / 100u) {
                     enemy_fire(g, i);
                     g->en.fire_cd[i] = stage_fire_cd(g);
                 }
@@ -1186,6 +1225,10 @@ int gv_enemy_sprite(const gv_game *g, int i) {
     switch (g->en.kind[i]) {
     case GV_EK_GUARD:
         return frame ? GV_SPR_GUARD_B : GV_SPR_GUARD_A;
+    case GV_EK_SENTINEL:
+        return frame ? GV_SPR_SENTINEL_B : GV_SPR_SENTINEL_A;
+    case GV_EK_DARTER:
+        return frame ? GV_SPR_DARTER_B : GV_SPR_DARTER_A;
     case GV_EK_FLAGSHIP:
         // Two-hit boss: once damaged it repaints, so you can see which ones
         // are one shot from dead.
