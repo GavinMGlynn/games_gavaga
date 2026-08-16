@@ -62,6 +62,15 @@ reproduce a bug or a screenshot.
 | `--shot F --shot-at T` | fast-forward to tick T, write one frame, exit |
 | `--scale N` | window size multiplier |
 | `--mute` | start silent |
+| `--no-rumble` | leave the gamepad still |
+| `--record F.gvr` | record the run: seed plus one input byte per tick |
+| `--replay F.gvr` | play a recording back and exit when it ends |
+
+A replay carries everything that decides how a run unfolds — seed, start stage,
+whether a game was begun at init, godmode and autoplay — and overrides the
+command line rather than merging with it, so `--replay` alone reproduces the
+original exactly. Recording is the easiest way to hand someone a bug: 3.6 KB a
+minute, and it replays byte-for-byte.
 
 `--trace` also prints a frame-pacing line once a second (fps, frames that
 overran a tick, frames that had to run two or more ticks, and the worst raw
