@@ -18,6 +18,7 @@
 // exactly sends no such event, the offset stays zero, and none of this does
 // anything.
 #include "gv_window.h"
+#include "gv_common.h"   // for the C23 nullptr shim on compilers that lack it
 
 #define GV_WIN_ORG   "gavaga"
 #define GV_WIN_APP   "gavaga"
