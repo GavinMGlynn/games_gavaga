@@ -59,21 +59,12 @@ static bool on_some_display(const gv_window_geom *g) {
     return ok;
 }
 
-static bool window_load(gv_window_geom *out) {
-    char path[1024];
-    if (!window_path(path, sizeof path)) return false;
-
-    SDL_IOStream *io = SDL_IOFromFile(path, "rb");
-    if (!io) return false;   // first run
-
-    char buf[128];
-    const size_t n = SDL_ReadIO(io, buf, sizeof buf - 1);
-    SDL_CloseIO(io);
-    buf[n] = '\0';
+bool gv_window_parse(const char *text, gv_window_geom *out) {
+    if (!text || !out) return false;
 
     char magic[32] = { 0 };
     int x = 0, y = 0, w = 0, h = 0, maxed = 0;
-    if (SDL_sscanf(buf, "%31s %d %d %d %d %d", magic, &x, &y, &w, &h, &maxed) != 6)
+    if (SDL_sscanf(text, "%31s %d %d %d %d %d", magic, &x, &y, &w, &h, &maxed) != 6)
         return false;
     if (SDL_strcmp(magic, GV_WIN_MAGIC) != 0) return false;
     if (w < GV_WIN_MIN || h < GV_WIN_MIN || w > GV_WIN_MAX || h > GV_WIN_MAX)
@@ -81,6 +72,30 @@ static bool window_load(gv_window_geom *out) {
 
     out->x = x; out->y = y; out->w = w; out->h = h;
     out->maximized = maxed != 0;
+    return true;
+}
+
+bool gv_window_format(char *buf, size_t buflen, const gv_window_geom *g) {
+    if (!buf || !g) return false;
+    const int len = SDL_snprintf(buf, buflen, "%s %d %d %d %d %d\n",
+                                 GV_WIN_MAGIC, g->x, g->y, g->w, g->h,
+                                 g->maximized ? 1 : 0);
+    return len > 0 && (size_t)len < buflen;
+}
+
+static bool window_load(gv_window_geom *out) {
+    char path[1024];
+    if (!window_path(path, sizeof path)) return false;
+
+    SDL_IOStream *io = SDL_IOFromFile(path, "rb");
+    if (!io) return false;   // first run
+
+    char buf[GV_WIN_LINE_MAX];
+    const size_t n = SDL_ReadIO(io, buf, sizeof buf - 1);
+    SDL_CloseIO(io);
+    buf[n] = '\0';
+
+    if (!gv_window_parse(buf, out)) return false;
 
     if (!on_some_display(out)) {
         SDL_Log("gavaga: saved window position is off-screen, using the default");
@@ -171,10 +186,12 @@ void gv_window_save(SDL_Window *win, const gv_window_state *st) {
         return;
     }
 
-    char line[128];
-    const int len = SDL_snprintf(line, sizeof line, "%s %d %d %d %d %d\n",
-                                 GV_WIN_MAGIC, x - st->bias_x, y - st->bias_y,
-                                 w, h, maxed ? 1 : 0);
-    if (len > 0) SDL_WriteIO(io, line, (size_t)len);
+    const gv_window_geom g = {
+        .x = x - st->bias_x, .y = y - st->bias_y,
+        .w = w, .h = h, .maximized = maxed,
+    };
+    char line[GV_WIN_LINE_MAX];
+    if (gv_window_format(line, sizeof line, &g))
+        SDL_WriteIO(io, line, SDL_strlen(line));
     SDL_CloseIO(io);
 }

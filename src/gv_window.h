@@ -22,6 +22,21 @@ typedef struct {
     uint64_t settle_until_ns;   // first move before this is the WM, not the user
 } gv_window_state;
 
+// --- the stored line ------------------------------------------------------
+// Split out from the file handling so the format can be tested without a
+// display: parsing is where a corrupt or hand-edited file has to be rejected,
+// and that is worth pinning down.
+
+#define GV_WIN_LINE_MAX 128
+
+// Parses one saved line. False if it is not ours, is malformed, or carries a
+// size outside what a window could sensibly be. Says nothing about whether the
+// position is on-screen - that needs displays, and is checked separately.
+bool gv_window_parse(const char *text, gv_window_geom *out);
+
+// Renders geometry back to a line. False if the buffer is too small.
+bool gv_window_format(char *buf, size_t buflen, const gv_window_geom *g);
+
 // Creates the window at the saved geometry if there is a usable one, otherwise
 // at the given default size with placement left to the window manager.
 SDL_Window *gv_window_create(const char *title, int def_w, int def_h,

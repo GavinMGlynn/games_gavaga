@@ -8,6 +8,7 @@
 #include "gv_path.h"
 #include "gv_star.h"
 #include "gv_game.h"
+#include "gv_window.h"
 
 #include <stdio.h>
 
@@ -376,6 +377,67 @@ static void test_enemy_shots_aim_down(void) {
     SDL_free(g);
 }
 
+// --- saved window geometry ------------------------------------------------
+// The parse half of gv_window is what has to reject a corrupt or hand-edited
+// file, and it is the half that needs no display.
+static void test_window_geometry(void) {
+    SECTION("window geometry round trip");
+
+    gv_window_geom g = { .x = -1200, .y = 340, .w = 672, .h = 864, .maximized = true };
+    char line[GV_WIN_LINE_MAX];
+    CHECK(gv_window_format(line, sizeof line, &g), "format failed");
+
+    gv_window_geom back = { 0 };
+    CHECK(gv_window_parse(line, &back), "could not parse what we just wrote: %s", line);
+    CHECK(back.x == g.x && back.y == g.y, "position %d,%d != %d,%d",
+          back.x, back.y, g.x, g.y);
+    CHECK(back.w == g.w && back.h == g.h, "size %dx%d != %dx%d",
+          back.w, back.h, g.w, g.h);
+    CHECK(back.maximized == g.maximized, "maximized flag lost");
+
+    // A negative position is legitimate: monitors sit left of and above the
+    // primary one all the time.
+    CHECK(gv_window_parse("gavaga-window -1920 -300 448 576 0", &back), "negative position rejected");
+    CHECK(back.x == -1920 && back.y == -300, "negative position mangled: %d,%d", back.x, back.y);
+
+    // A buffer too small must fail rather than write a truncated line that
+    // would parse back as something else.
+    char tiny[8];
+    CHECK(!gv_window_format(tiny, sizeof tiny, &g), "format into a tiny buffer should fail");
+
+    SECTION("window geometry rejects bad input");
+
+    static const char *bad[] = {
+        "",                                       // empty
+        "\n",
+        "garbage",                                // not our format
+        "gavaga-window",                          // magic only
+        "gavaga-window 10 20 640",                // truncated
+        "gavaga-window 10 20 640 480",            // still one short
+        "not-gavaga 10 20 640 480 0",             // someone else's file
+        "gavaga-window 10 20 0 480 0",            // zero width
+        "gavaga-window 10 20 640 0 0",            // zero height
+        "gavaga-window 10 20 -640 480 0",         // negative size
+        "gavaga-window 10 20 8 8 0",              // too small to find again
+        "gavaga-window 10 20 999999 480 0",       // absurd width
+        "gavaga-window 10 20 640 999999 0",       // absurd height
+        "gavaga-window a b c d e",                // non-numeric
+    };
+    for (size_t i = 0; i < GV_COUNTOF(bad); i++) {
+        gv_window_geom out = { .x = 12345, .y = 12345, .w = 12345, .h = 12345 };
+        CHECK(!gv_window_parse(bad[i], &out), "accepted bad line \"%s\"", bad[i]);
+    }
+
+    CHECK(!gv_window_parse(nullptr, &back), "null text should be rejected");
+
+    // Trailing whitespace and a missing newline are both fine - a file that
+    // has been opened in an editor and saved should still load.
+    CHECK(gv_window_parse("gavaga-window 5 6 640 480 1", &back), "no trailing newline rejected");
+    CHECK(back.maximized, "maximized flag not read");
+    CHECK(gv_window_parse("gavaga-window 5 6 640 480 0  \r\n", &back), "trailing whitespace rejected");
+    CHECK(!back.maximized, "maximized flag should be clear");
+}
+
 int main(void) {
     printf("gavaga tests\n");
     test_fixed();
@@ -386,6 +448,7 @@ int main(void) {
     test_determinism();
     test_soak_invariants();
     test_enemy_shots_aim_down();
+    test_window_geometry();
 
     printf("\n%d checks, %d failed\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
