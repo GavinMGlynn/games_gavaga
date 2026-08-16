@@ -2,14 +2,19 @@
 #ifndef GV_COMMON_H
 #define GV_COMMON_H
 
-// Built as C23, but deliberately staying inside the subset every target
-// compiler actually implements. In particular the code uses NULL rather than
-// C23's `nullptr`: MSVC 19.51 still rejects that keyword in C mode, and
-// Windows x64 is a supported target.
 #include <SDL3/SDL.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+
+// MSVC's C mode has no C23 `nullptr` keyword (still true of 19.51), and
+// Windows x64 is a supported target. CMake probes for the keyword and defines
+// GV_NO_NULLPTR only when the compiler genuinely lacks it, so this never
+// shadows a real keyword - a future MSVC that implements it simply stops
+// failing the probe and this block disappears.
+#ifdef GV_NO_NULLPTR
+#  define nullptr ((void *)0)
+#endif
 
 // ---------------------------------------------------------------------------
 // Playfield / timing

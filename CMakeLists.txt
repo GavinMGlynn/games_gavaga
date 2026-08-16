@@ -52,6 +52,33 @@ if(_gv_min AND CMAKE_C_COMPILER_VERSION VERSION_LESS _gv_min)
 endif()
 message(STATUS "gavaga: ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION} (C23)")
 
+# MSVC has no /std:c23 yet; its newest C features sit behind /std:clatest, and
+# /Zc:__STDC__ makes it report standard version macros honestly. CMake's
+# C_STANDARD 23 should already select the former, but say it outright so the
+# build does not depend on that mapping staying put.
+set(GAVAGA_C_FLAGS "")
+if(MSVC)
+    set(GAVAGA_C_FLAGS /std:clatest /Zc:__STDC__)
+endif()
+
+# Even so, C23 support is uneven: a compiler can take the flag and still not
+# implement a given feature. Probe for `nullptr` rather than guessing from
+# version numbers, using the same flags the real build gets, so a compiler that
+# gains it later simply stops needing the shim.
+include(CheckCSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS "${GAVAGA_C_FLAGS}")
+list(JOIN CMAKE_REQUIRED_FLAGS " " CMAKE_REQUIRED_FLAGS)
+check_c_source_compiles(
+    "int main(void) { void *p = nullptr; return p != (void *)0; }"
+    GAVAGA_HAVE_NULLPTR)
+unset(CMAKE_REQUIRED_FLAGS)
+
+if(GAVAGA_HAVE_NULLPTR)
+    message(STATUS "gavaga: C23 nullptr - native")
+else()
+    message(STATUS "gavaga: C23 nullptr - not implemented, using a compatibility macro")
+endif()
+
 # ---------------------------------------------------------------------------
 # SDL3
 # ---------------------------------------------------------------------------
@@ -107,6 +134,12 @@ add_executable(gavaga
 
 target_include_directories(gavaga PRIVATE src)
 target_link_libraries(gavaga PRIVATE ${GAVAGA_SDL_TARGET})
+
+if(NOT GAVAGA_HAVE_NULLPTR)
+    target_compile_definitions(gavaga PRIVATE GV_NO_NULLPTR)
+endif()
+
+target_compile_options(gavaga PRIVATE ${GAVAGA_C_FLAGS})
 
 if(MSVC)
     target_compile_options(gavaga PRIVATE /W4 /utf-8)

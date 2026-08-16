@@ -146,10 +146,23 @@ yours is too old.
 | AppleClang | 16 | Xcode 16 |
 | MSVC | 19.39 | VS 2022 17.9 |
 
-The code stays inside the C23 subset all four implement. Notably it uses `NULL`
-rather than C23's `nullptr`, because MSVC still rejects that keyword in C mode
-(checked against 19.51) — CI caught it, so it is worth knowing before you reach
-for a shiny new keyword here.
+C23 support is uneven in practice, which the first Windows CI run found the
+hard way — 22 × `error C2065: 'nullptr': undeclared identifier`. MSVC has no
+`/std:c23` yet, so the build passes `/std:clatest` and `/Zc:__STDC__`
+explicitly rather than relying on CMake's `C_STANDARD 23` mapping.
+
+Taking the flag and implementing a feature are different things, though, so
+configure also *probes* for `nullptr` with those same flags and defines a
+compatibility macro only if it is genuinely missing. A compiler that gains the
+keyword later just stops needing the shim — nothing to update. Which path you
+got is printed at configure time:
+
+```
+-- gavaga: C23 nullptr - native
+```
+
+(For the record: including `<stddef.h>` does not help here. In C23 `nullptr` is
+a keyword, not a macro — `<stddef.h>` only supplies `nullptr_t`.)
 
 **Debian / Ubuntu**
 

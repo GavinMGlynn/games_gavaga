@@ -45,7 +45,7 @@ static const char *const ART_PLAYER[] = {
     "1..2233333322..1",
     "1..22.6666.22..1",
     "....66....66....",
-    NULL
+    nullptr
 };
 
 static const char *const ART_GRUNT_A[] = {
@@ -65,7 +65,7 @@ static const char *const ART_GRUNT_A[] = {
     "......3cc3......",
     ".......33.......",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_GRUNT_B[] = {
@@ -85,7 +85,7 @@ static const char *const ART_GRUNT_B[] = {
     "......3cc3......",
     ".......33.......",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_GUARD_A[] = {
@@ -105,7 +105,7 @@ static const char *const ART_GUARD_A[] = {
     ".....445544.....",
     "......4444......",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_GUARD_B[] = {
@@ -125,7 +125,7 @@ static const char *const ART_GUARD_B[] = {
     "....45555554....",
     ".....445544.....",
     "......4444......",
-    NULL
+    nullptr
 };
 
 static const char *const ART_FLAGSHIP_A[] = {
@@ -145,7 +145,7 @@ static const char *const ART_FLAGSHIP_A[] = {
     ".....889988.....",
     "......9999......",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_FLAGSHIP_B[] = {
@@ -165,7 +165,7 @@ static const char *const ART_FLAGSHIP_B[] = {
     "....88999988....",
     ".....889988.....",
     "......9999......",
-    NULL
+    nullptr
 };
 
 static const char *const ART_PSHOT[] = {
@@ -177,7 +177,7 @@ static const char *const ART_PSHOT[] = {
     ".22.",
     ".33.",
     ".33.",
-    NULL
+    nullptr
 };
 
 static const char *const ART_ESHOT[] = {
@@ -187,7 +187,7 @@ static const char *const ART_ESHOT[] = {
     "677776",
     ".6776.",
     "..66..",
-    NULL
+    nullptr
 };
 
 static const char *const ART_BOOM0[] = {
@@ -207,7 +207,7 @@ static const char *const ART_BOOM0[] = {
     "................",
     "................",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_BOOM1[] = {
@@ -227,7 +227,7 @@ static const char *const ART_BOOM1[] = {
     "................",
     "................",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_BOOM2[] = {
@@ -247,7 +247,7 @@ static const char *const ART_BOOM2[] = {
     ".7..6......6..7.",
     "..7..........7..",
     "................",
-    NULL
+    nullptr
 };
 
 static const char *const ART_BOOM3[] = {
@@ -267,7 +267,7 @@ static const char *const ART_BOOM3[] = {
     "..6..........6..",
     "................",
     "7....7....7....7",
-    NULL
+    nullptr
 };
 
 static const char *const ART_LIFE[] = {
@@ -279,7 +279,7 @@ static const char *const ART_LIFE[] = {
     "11233211",
     "1.2332.1",
     "..6..6..",
-    NULL
+    nullptr
 };
 
 static const char *const ART_BADGE[] = {
@@ -291,7 +291,7 @@ static const char *const ART_BADGE[] = {
     "...3....",
     "...3....",
     "........",
-    NULL
+    nullptr
 };
 
 static const char *const *const ART[GV_SPR_COUNT] = {
@@ -382,7 +382,7 @@ bool gv_sprite_init(SDL_Renderer *ren) {
         SDL_Log("gavaga: could not create sprite atlas: %s", SDL_GetError());
         return false;
     }
-    if (!SDL_UpdateTexture(s_atlas, NULL, s_pixels, ATLAS_W * 4)) {
+    if (!SDL_UpdateTexture(s_atlas, nullptr, s_pixels, ATLAS_W * 4)) {
         SDL_Log("gavaga: could not upload sprite atlas: %s", SDL_GetError());
         return false;
     }
@@ -393,7 +393,7 @@ bool gv_sprite_init(SDL_Renderer *ren) {
 }
 
 void gv_sprite_quit(void) {
-    if (s_atlas) { SDL_DestroyTexture(s_atlas); s_atlas = NULL; }
+    if (s_atlas) { SDL_DestroyTexture(s_atlas); s_atlas = nullptr; }
 }
 
 SDL_Texture *gv_sprite_texture(void) { return s_atlas; }

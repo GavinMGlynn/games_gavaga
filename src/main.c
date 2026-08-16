@@ -39,7 +39,7 @@ typedef struct {
 
 // Reads back the current render target. Must run before SDL_RenderPresent.
 static bool save_shot(SDL_Renderer *ren, const char *path) {
-    SDL_Surface *surf = SDL_RenderReadPixels(ren, NULL);
+    SDL_Surface *surf = SDL_RenderReadPixels(ren, nullptr);
     if (!surf) {
         SDL_Log("gavaga: RenderReadPixels failed: %s", SDL_GetError());
         return false;
