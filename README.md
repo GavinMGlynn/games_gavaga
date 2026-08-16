@@ -6,7 +6,7 @@
 [![SDL3](https://img.shields.io/badge/SDL-3.2.30-informational.svg)](https://github.com/libsdl-org/SDL)
 
 A Galaga-inspired fixed shooter in C23 and SDL3. Not a clone of the original —
-its own art, its own tables — but built on the same architecture the arcade
+CC0 art, its own tables — but built on the same architecture the arcade
 hardware used: a 224×288 playfield, logic locked to 60.606 Hz, an LFSR
 starfield, and enemy flight driven entirely by turn tables.
 
@@ -123,7 +123,7 @@ total duration. Edit the table, rebuild, look again.
 | `gv_path.c` / `gv_paths.c` | the turn-table interpreter and the tables |
 | `gv_game.c` | simulation: pools, formation, waves, collisions, tractor beam. Touches no renderer, no clock, no filesystem, no heap |
 | `gv_star.c` | LFSR starfield |
-| `gv_sprite.c` | placeholder art as ASCII rows, baked to one atlas at startup |
+| `gv_sprite.c` | the sprite atlas: CC0 art embedded as a BMP, with hand-drawn ASCII art as the fallback |
 | `gv_render.c` | all drawing |
 | `gv_audio.c` | the synth: no sound files, everything generated at runtime |
 | `gv_score.c` | the persistent high score |
@@ -180,9 +180,41 @@ logs it and runs silently rather than failing to start.
 
 ## Art
 
-All placeholder, all mine to throw away — no Namco assets anywhere in the tree.
-Sprites are ASCII rows in `gv_sprite.c`, one character per pixel against a
-16-colour palette:
+Ships and effects are from [Space Shooter
+Redux](https://opengameart.org/content/space-shooter-redux) by
+[Kenney](https://kenney.nl), released under
+[CC0](http://creativecommons.org/publicdomain/zero/1.0/) — public domain, no
+attribution required, though it is the least we can do. There are no Namco
+assets anywhere in the tree, and there never will be: every Galaga sprite sheet
+on the internet is a rip of copyrighted art, whatever the page says.
+
+The sources used are vendored in `assets/kenney/` alongside their licence.
+`tools/make_atlas.py` scales them into a 32-texel grid and writes two things:
+
+```
+assets/gavaga_atlas.png     the atlas, for looking at
+src/gv_atlas_bmp.h          the same image as a C array, for the game
+```
+
+BMP rather than PNG because SDL decodes BMP by itself; PNG would mean pulling in
+SDL_image, and libpng and zlib behind it, on three platforms — a lot to carry
+for one 96 KB image. Embedding it keeps the binary a single file you can copy
+anywhere, which was true before the art arrived and stays true now. Re-run the
+tool after changing anything in `assets/kenney/`; it needs nothing but python3.
+
+The pack has no explosion sequence — its "fire" sprites are flame plumes that
+read as an exhaust rather than a ship coming apart — so the four boom frames are
+one starburst grown and cooled: small and white-hot, then yellow, orange, and a
+dim red ghost. Nor does it have animation frames, so the second frame of each
+enemy is the first squashed slightly; a ship that breathes beats one that is
+simply static.
+
+Cells are 32 texels but draw at 16 playfield pixels, so the sprites carry more
+detail than the screen resolution needs and the formation geometry is untouched.
+
+**The hand-drawn art is still there and still works.** `gv_sprite.c` keeps the
+original ASCII rows — one character per pixel against a 16-colour palette — and
+falls back to them if the baked atlas ever fails to decode:
 
 ```c
 static const char *const ART_PLAYER[] = {
@@ -191,9 +223,8 @@ static const char *const ART_PLAYER[] = {
     ...
 ```
 
-Edit the strings and rebuild, or swap `gv_sprite_init()` for a PNG loader when
-you have real art — the rest of the game only ever asks for a sprite id and
-gets back a source rect. The 5×7 HUD font in `gv_font.c` works the same way.
+The startup log says which you got. The 5×7 HUD font in `gv_font.c` is still
+ASCII rows and has no external art at all.
 
 ## Building elsewhere
 

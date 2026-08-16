@@ -29,8 +29,18 @@ enum {
     GV_SPR_COUNT
 };
 
+// The baked art is 32 texels per cell and draws at 16 logical pixels, so the
+// playfield geometry is unchanged and the sprites simply carry more detail
+// than the screen resolution needs. The hand-drawn fallback is 1:1.
 #define GV_ATLAS_CELL 16
 #define GV_ATLAS_COLS 8
+
+// Atlas texels per logical pixel. Divide a source rect by this to get the size
+// a sprite should be drawn at.
+int gv_sprite_oversample(void);
+
+// True when the baked art loaded; false when the built-in art is being used.
+bool gv_sprite_using_art(void);
 
 bool gv_sprite_init(SDL_Renderer *ren);
 void gv_sprite_quit(void);

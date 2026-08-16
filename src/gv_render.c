@@ -24,24 +24,38 @@ void gv_render_quit(void) {
     gv_sprite_quit();
 }
 
+// How big a sprite is in playfield pixels. The baked art stores more texels
+// per pixel than the screen has, so the source rect is not the draw size.
+static void sprite_size(const SDL_FRect *src, float *w, float *h) {
+    const float os = (float)gv_sprite_oversample();
+    *w = src->w / os;
+    *h = src->h / os;
+}
+
 void gv_draw_sprite_px(SDL_Renderer *ren, int spr, int x, int y) {
     const SDL_FRect *src = gv_sprite_rect(spr);
-    const SDL_FRect dst = { (float)x, (float)y, src->w, src->h };
+    float w, h;
+    sprite_size(src, &w, &h);
+    const SDL_FRect dst = { (float)x, (float)y, w, h };
     SDL_RenderTexture(ren, gv_sprite_texture(), src, &dst);
 }
 
 void gv_draw_sprite(SDL_Renderer *ren, int spr, fix_t x, fix_t y) {
     const SDL_FRect *src = gv_sprite_rect(spr);
+    float w, h;
+    sprite_size(src, &w, &h);
     gv_draw_sprite_px(ren, spr,
-                      gv_unfix(x) - (int)src->w / 2,
-                      gv_unfix(y) - (int)src->h / 2);
+                      gv_unfix(x) - (int)w / 2,
+                      gv_unfix(y) - (int)h / 2);
 }
 
 void gv_draw_sprite_rot(SDL_Renderer *ren, int spr, fix_t x, fix_t y, ang_t a) {
     const SDL_FRect *src = gv_sprite_rect(spr);
-    const SDL_FRect dst = { (float)(gv_unfix(x) - (int)src->w / 2),
-                            (float)(gv_unfix(y) - (int)src->h / 2),
-                            src->w, src->h };
+    float sw, sh;
+    sprite_size(src, &sw, &sh);
+    const SDL_FRect dst = { (float)(gv_unfix(x) - (int)sw / 2),
+                            (float)(gv_unfix(y) - (int)sh / 2),
+                            sw, sh };
     const double deg = (double)a * (360.0 / 65536.0);
     SDL_RenderTextureRotated(ren, gv_sprite_texture(), src, &dst, deg,
                              nullptr, SDL_FLIP_NONE);

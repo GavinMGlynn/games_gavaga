@@ -6,6 +6,7 @@
 //   4 red           5 dk-red   6 yellow    7 orange    8 green
 //   9 dk-green      a magenta  b purple    c cyan      d grey    e dk-grey
 #include "gv_sprite.h"
+#include "gv_atlas_bmp.h"
 
 static const SDL_Color GV_PAL[16] = {
     {  16,  16,  16, 255 },  // 0 black
@@ -421,6 +422,8 @@ static const gv_art ART[GV_SPR_COUNT] = {
 #define ATLAS_H    (ATLAS_ROWS * GV_ATLAS_CELL)
 
 static SDL_Texture *s_atlas;
+static int          s_oversample = 1;
+static bool         s_baked_art;          // the Kenney atlas, rather than the ASCII
 static SDL_FRect    s_rects[GV_SPR_COUNT];
 static uint8_t      s_pixels[ATLAS_W * ATLAS_H * 4];   // RGBA, static: no malloc
 
@@ -536,7 +539,58 @@ SDL_Surface *gv_sprite_icon(int scale) {
     return icon;
 }
 
+// The baked art, decoded from the BMP embedded in gv_atlas_bmp.h. Cells are a
+// fixed grid, so the rects are arithmetic rather than anything stored.
+static bool load_baked_atlas(SDL_Renderer *ren) {
+    SDL_IOStream *io = SDL_IOFromConstMem(GV_ATLAS_BMP, sizeof GV_ATLAS_BMP);
+    if (!io) return false;
+
+    SDL_Surface *surf = SDL_LoadBMP_IO(io, true);
+    if (!surf) {
+        SDL_Log("gavaga: embedded atlas would not decode (%s)", SDL_GetError());
+        return false;
+    }
+
+    s_atlas = SDL_CreateTextureFromSurface(ren, surf);
+    SDL_DestroySurface(surf);
+    if (!s_atlas) {
+        SDL_Log("gavaga: could not upload the embedded atlas (%s)", SDL_GetError());
+        return false;
+    }
+
+    const int cell = GV_ATLAS_BMP_CELL;
+    for (int i = 0; i < GV_SPR_COUNT; i++) {
+        const int cx = (i % GV_ATLAS_COLS) * cell;
+        const int cy = (i / GV_ATLAS_COLS) * cell;
+        if (cy + cell > GV_ATLAS_BMP_HEIGHT) {   // atlas is short: fall back wholesale
+            SDL_DestroyTexture(s_atlas);
+            s_atlas = nullptr;
+            SDL_Log("gavaga: embedded atlas has no cell for sprite %d", i);
+            return false;
+        }
+        s_rects[i] = (SDL_FRect){ (float)cx, (float)cy, (float)cell, (float)cell };
+    }
+
+    s_oversample = GV_ATLAS_OVERSAMPLE;
+    s_baked_art  = true;
+
+    // Linear, unlike the hand-drawn art: these cells hold more detail than the
+    // playfield resolution, and nearest sampling throws that away and aliases.
+    SDL_SetTextureScaleMode(s_atlas, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureBlendMode(s_atlas, SDL_BLENDMODE_BLEND);
+    return true;
+}
+
 bool gv_sprite_init(SDL_Renderer *ren) {
+    if (load_baked_atlas(ren)) return true;
+
+    // No art, or it would not decode: fall back to the sprites drawn in this
+    // file. The game is fully playable either way, which is the point of
+    // keeping them.
+    SDL_Log("gavaga: using the built-in art");
+    s_oversample = 1;
+    s_baked_art  = false;
+
     if (!bake_atlas()) return false;
 
     s_atlas = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
@@ -555,8 +609,13 @@ bool gv_sprite_init(SDL_Renderer *ren) {
     return true;
 }
 
+int  gv_sprite_oversample(void) { return s_oversample; }
+bool gv_sprite_using_art(void)  { return s_baked_art; }
+
 void gv_sprite_quit(void) {
     if (s_atlas) { SDL_DestroyTexture(s_atlas); s_atlas = nullptr; }
+    s_oversample = 1;
+    s_baked_art  = false;
 }
 
 SDL_Texture *gv_sprite_texture(void) { return s_atlas; }
