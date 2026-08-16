@@ -153,6 +153,21 @@ static void trace_tick(gv_app *app) {
     }
 }
 
+// WSL announces itself in the kernel release string, and nowhere else that is
+// both cheap to read and reliable.
+static bool running_under_wsl(void) {
+    SDL_IOStream *io = SDL_IOFromFile("/proc/sys/kernel/osrelease", "rb");
+    if (!io) return false;
+
+    char buf[128] = { 0 };
+    const size_t n = SDL_ReadIO(io, buf, sizeof buf - 1);
+    SDL_CloseIO(io);
+    buf[n] = '\0';
+
+    for (char *p = buf; *p; p++) *p = (char)SDL_tolower((unsigned char)*p);
+    return SDL_strstr(buf, "microsoft") || SDL_strstr(buf, "wsl");
+}
+
 // The title bar and the taskbar get the ship you fly, drawn from the same
 // procedural art as the game. Purely cosmetic, so a failure is not worth
 // mentioning to the player - the window simply keeps the default icon.
@@ -398,6 +413,18 @@ static bool save_shot(SDL_Renderer *ren, const char *path) {
 // --- init -----------------------------------------------------------------
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     SDL_SetAppMetadata("Gavaga", "0.1.0", "dev.gavin.gavaga");
+
+    // WSL2 has no kernel driver for an Xbox pad: it speaks GIP, a
+    // vendor-specific protocol, so usbhid will not bind it and this kernel
+    // ships no xpad. SDL can still drive it through libusb from userspace, but
+    // only if its whitelist is waived - that whitelist exists to stop libusb
+    // stealing devices from kernel drivers, and under WSL there are none to
+    // steal. Scoped to WSL for exactly that reason: on a real Linux box this
+    // hint could take a device away from the driver already handling it.
+    if (running_under_wsl()) {
+        SDL_SetHint("SDL_HIDAPI_LIBUSB_WHITELIST", "0");
+        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+    }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("gavaga: SDL_Init failed: %s", SDL_GetError());
