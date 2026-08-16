@@ -18,10 +18,12 @@
 // need to stop sounding like they were recorded in a vacuum.
 #include "gv_audio.h"
 #include "gv_game.h"     // for the GV_SFX_* ids
+#include "gv_sfx_pcm.h"  // Kenney's effects, decoded at bake time
 
 #define GV_SR       44100
 #define GV_VOICES   10
 #define GV_MASTER   0.34f
+#define GV_PCM_GAIN 0.55f   // recorded clips against the synth's own level
 
 enum { W_SQUARE = 0, W_TRI, W_SAW, W_NOISE };
 
@@ -39,6 +41,8 @@ typedef struct {
     float          send;        // how much of it goes to the reverb, 0..1
     const gv_note *melody;      // when set, played note by note instead
     int            melody_len;
+    const short   *clip;        // when set, a recorded effect wins over all of it
+    int            clip_len;
 } gv_sfxdef;
 
 // --- the sound set --------------------------------------------------------
@@ -50,8 +54,8 @@ static const gv_note M_GAMEOVER[]  = { {392,180},{349,180},{294,180},{196,340} }
 static const gv_note M_PERFECT[]   = { {1047,80},{1319,80},{1568,80},{2093,200} };
 
 // SWEEP(wave, from, to, vol, ms, cutoff, reverb send)
-#define SWEEP(w, a, b, v, t, c, s) { (w), (a), (b), (v), (t), (c), (s), nullptr, 0 }
-#define TUNE(w, m, v, c, s)        { (w), 0, 0, (v), 0, (c), (s), (m), GV_COUNTOF(m) }
+#define SWEEP(w, a, b, v, t, c, s) { (w), (a), (b), (v), (t), (c), (s), nullptr, 0, nullptr, 0 }
+#define TUNE(w, m, v, c, s)        { (w), 0, 0, (v), 0, (c), (s), (m), GV_COUNTOF(m), nullptr, 0 }
 
 static const gv_sfxdef SFX[GV_SFX_COUNT] = {
     [GV_SFX_NONE]          = SWEEP(W_SQUARE, 0, 0, 0.00f, 0, 0, 0.00f),
@@ -129,6 +133,10 @@ typedef struct {
     float    lp, lp_k;          // one-pole low-pass state and coefficient
     float    send;              // reverb send, 0..1
 
+    // A recorded clip, when this effect has one. The synth fields above are
+    // unused then: a sample already has its own envelope and tone.
+    const short *pcm;
+
     const gv_note *melody;      // remaining notes, if this is a tune
     int      melody_len, melody_idx;
 } gv_voice;
@@ -173,6 +181,15 @@ static void voice_start(gv_voice *v, const gv_sfxdef *d) {
     v->lp_k = lp_coeff(d->cut);
     v->send = d->send;
 
+    if (d->clip && d->clip_len > 0) {
+        v->active = true;
+        v->pcm    = d->clip;
+        v->len    = (uint32_t)d->clip_len;
+        v->pos    = 0;
+        v->vol    = GV_PCM_GAIN;
+        return;
+    }
+
     if (d->melody && d->melody_len > 0) {
         v->melody     = d->melody;
         v->melody_len = d->melody_len;
@@ -195,6 +212,15 @@ static float wave_sample(gv_voice *v) {
 // Advances one voice by a sample and returns its filtered, enveloped output.
 // Returns 0 and clears `active` when the voice (or its tune) is finished.
 static float voice_sample(gv_voice *v) {
+    // A recording carries its own shape; the synth envelope would only fight
+    // it. The clips are faded at the tail at bake time so the end does not
+    // click.
+    if (v->pcm) {
+        const float s = (float)v->pcm[v->pos] * (1.0f / 32768.0f) * v->vol;
+        if (++v->pos >= v->len) v->active = false;
+        return s;
+    }
+
     // Linear attack then linear decay - percussive, which is what these blips
     // want.
     float env;
@@ -369,7 +395,16 @@ void gv_audio_quit(void) {
 
 void gv_audio_play(int sfx) {
     if (!s_ok || s_muted || sfx <= GV_SFX_NONE || sfx >= GV_SFX_COUNT) return;
-    const gv_sfxdef *d = &SFX[sfx];
+
+    // The recorded effects are held in their own generated table rather than
+    // written into SFX[], so the synth definitions stay readable and stay the
+    // fallback for every event the pack does not cover.
+    gv_sfxdef def = SFX[sfx];
+    if (sfx < (int)GV_COUNTOF(GV_PCM_FOR_SFX) && GV_PCM_FOR_SFX[sfx].pcm) {
+        def.clip     = GV_PCM_FOR_SFX[sfx].pcm;
+        def.clip_len = GV_PCM_FOR_SFX[sfx].len;
+    }
+    const gv_sfxdef *d = &def;
 
     SDL_LockMutex(s_lock);
 

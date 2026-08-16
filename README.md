@@ -125,7 +125,7 @@ total duration. Edit the table, rebuild, look again.
 | `gv_star.c` | LFSR starfield |
 | `gv_sprite.c` | the sprite atlas: CC0 art embedded as a BMP, with hand-drawn ASCII art as the fallback |
 | `gv_render.c` | all drawing |
-| `gv_audio.c` | the synth: no sound files, everything generated at runtime |
+| `gv_audio.c` | the mixer: CC0 recordings where the pack has them, synthesis for the rest and for the music bed |
 | `gv_score.c` | the persistent high score |
 | `gv_debug.c` | the F1 debug window and F3 path catalogue |
 | `gv_math.c` | integer sin/cos/atan tables |
@@ -173,10 +173,35 @@ twinkle, and scroll speed is set per game state.
 
 ## Sound
 
-No audio files either. Each effect is a waveform, a frequency sweep and an
-envelope, mixed per sample on the audio thread in `gv_audio.c`; longer cues are
-short note lists. If there is no audio device — headless CI, say — the game
-logs it and runs silently rather than failing to start.
+Eight of the game's thirteen effects are Kenney's CC0 recordings — the shot,
+enemy and player explosions, the flagship hit, capture, rescue, extra life and
+the stage jingle. The other five (flagship explosion, dive, tractor beam, game
+over, perfect-stage fanfare) have no plausible stand-in in a seven-file pack, so
+they stay synthesised: a waveform, a frequency sweep and an envelope, mixed per
+sample on the audio thread in `gv_audio.c`. So is the music bed, which the pack
+has nothing for.
+
+The recordings are decoded to the mixer's own format at bake time by
+`tools/make_sounds.py` and embedded as `src/gv_sfx_pcm.h`, so nothing resamples
+at runtime, no vorbis decoder is linked in, and the binary is still one file.
+That needs `ffmpeg` on PATH — but only to re-bake, not to build. The clips are
+trimmed hard: `sfx_laser1` is 1.2 seconds and the player fires about three times
+a second, so untrimmed it would stack four copies into a drone.
+
+The signal path, per sample:
+
+```
+voice -> low-pass -> envelope -> dry bus
+                              \-> reverb send
+music bed ----------------------> dry bus (ducked by the effects)
+dry + reverb(send) -> master -> soft clip -> out
+```
+
+Every effect is verified audible by `tools/`-style harness runs against SDL's
+disk audio driver, which needs no device and no window.
+
+If there is no audio device — headless CI, say — the game logs it and runs
+silently rather than failing to start.
 
 ## Art
 
