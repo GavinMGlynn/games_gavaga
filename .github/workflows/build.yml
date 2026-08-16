@@ -29,11 +29,32 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_RENDER_DRIVER: software
-        run: ./build/gavaga --play --debug --shot smoke.bmp --shot-at 5000
+          SDL_AUDIODRIVER: dummy
+        run: ./build/gavaga --play --debug --seed 1 --shot smoke.bmp --shot-at 5000
+
+      # The capture -> rescue -> dual-fighter chain is the longest path in the
+      # game and easy to break without noticing, so pin it with a fixed seed.
+      - name: Tractor beam regression
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+          SDL_AUDIODRIVER: dummy
+        run: |
+          ./build/gavaga --autoplay --godmode --stage 2 --seed 1 --trace \
+                         --shot beam.bmp --shot-at 4000 2>&1 | tee trace.log
+          for want in "mode play -> captured" "captive held: yes" \
+                      "rescue ship: released" "dual fighter: DOCKED"; do
+            grep -qF "$want" trace.log || { echo "MISSING: $want"; exit 1; }
+          done
+          echo "capture chain OK"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-frame
-          path: smoke.bmp
+          name: linux-frames
+          path: |
+            smoke.bmp
+            beam.bmp
+            trace.log
 
   windows:
     name: Windows x64 (MSVC)

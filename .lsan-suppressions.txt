@@ -1,0 +1,18 @@
+# LeakSanitizer suppressions.
+#
+# Use with (note LSAN_OPTIONS, not ASAN_OPTIONS - ASan will refuse to parse
+# this file):
+#   ASAN_OPTIONS=detect_leaks=1 \
+#   LSAN_OPTIONS=suppressions=.lsan-suppressions.txt
+#
+# Everything here is third-party and one-time. Nothing in src/ belongs in this
+# file - if a gavaga leak shows up, fix the leak.
+
+# SDL3's PulseAudio backend enumerates devices on a libpulse callback thread.
+# SDL_AddAudioDevice calls SDL_SetError on that thread, which allocates SDL's
+# thread-local error buffer, and it is never reclaimed because SDL does not own
+# the thread. Measured at a fixed 145 bytes in 3 allocations, identical after
+# 3,000 and 30,000 ticks, so it does not grow with runtime. Running with
+# SDL_AUDIODRIVER=dummy is completely clean, which is what pins it to this
+# backend rather than to our audio code.
+leak:AddPulseAudioDevice

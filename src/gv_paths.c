@@ -94,6 +94,16 @@ static const gv_pathstep P_DIVE_STRAFE[] = {
     GV_HOLD(70),
 };
 
+// A flagship leaving formation to set up a tractor beam: lean out of the
+// column, then straighten up so it ends hanging vertically over the playfield
+// with the beam pointing straight down.
+static const gv_pathstep P_BEAM_DIVE[] = {
+    GV_TURN(35, 18),
+    GV_HOLD(26),
+    GV_TURN(-35, 18),
+    GV_HOLD(20),
+};
+
 // --- challenging-stage flybys --------------------------------------------
 
 static const gv_pathstep P_FLYBY_WAVE[] = {
@@ -133,6 +143,7 @@ const gv_pathdef gv_path_table[GV_PATH_COUNT] = {
     [GV_PATH_DIVE_LOOP]    = GV_PATH_ENTRY(P_DIVE_LOOP,    "dive.loop"),
     [GV_PATH_DIVE_ZIGZAG]  = GV_PATH_ENTRY(P_DIVE_ZIGZAG,  "dive.zigzag"),
     [GV_PATH_DIVE_STRAFE]  = GV_PATH_ENTRY(P_DIVE_STRAFE,  "dive.strafe"),
+    [GV_PATH_BEAM_DIVE]    = GV_PATH_ENTRY(P_BEAM_DIVE,    "beam.dive"),
     [GV_PATH_FLYBY_WAVE]   = GV_PATH_ENTRY(P_FLYBY_WAVE,   "flyby.wave"),
     [GV_PATH_FLYBY_LOOP]   = GV_PATH_ENTRY(P_FLYBY_LOOP,   "flyby.loop"),
     [GV_PATH_FLYBY_CROSS]  = GV_PATH_ENTRY(P_FLYBY_CROSS,  "flyby.cross"),

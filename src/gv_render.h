@@ -11,5 +11,6 @@ void gv_render_frame(const gv_game *g, SDL_Renderer *ren);
 // Draws a sprite centred on a 16.16 position, snapped to the pixel grid.
 void gv_draw_sprite(SDL_Renderer *ren, int spr, fix_t x, fix_t y);
 void gv_draw_sprite_px(SDL_Renderer *ren, int spr, int x, int y);
+void gv_draw_sprite_rot(SDL_Renderer *ren, int spr, fix_t x, fix_t y, ang_t a);
 
 #endif // GV_RENDER_H

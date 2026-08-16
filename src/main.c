@@ -13,6 +13,12 @@
 #include "gv_common.h"
 #include "gv_game.h"
 #include "gv_render.h"
+#include "gv_audio.h"
+#include "gv_score.h"
+
+// The high score is written at most this often while playing, plus once on
+// exit - otherwise leading the board would mean a file write per point.
+#define SAVE_INTERVAL_NS 5000000000ULL
 
 #define WINDOW_SCALE 3
 
@@ -34,8 +40,155 @@ typedef struct {
     uint32_t    shot_at;
     bool        start_debug;
     bool        start_play;
+    bool        start_mute;
+    bool        autoplay;
+    bool        godmode;
+    int         start_stage;
+    uint32_t    seed;
     uint16_t    start_path;
+
+    bool     save_due;
+    uint64_t last_save_ns;
+
+    // --trace: log state transitions with their tick, so a soak run can be
+    // pointed at the exact moment something interesting happened.
+    bool     trace;
+    uint8_t  tr_mode;
+    int      tr_stage;
+    bool     tr_captive, tr_dual, tr_rescue, tr_beam;
 } gv_app;
+
+static const char *mode_label(uint8_t m) {
+    switch (m) {
+    case GV_MODE_ATTRACT:     return "attract";
+    case GV_MODE_READY:       return "ready";
+    case GV_MODE_PLAY:        return "play";
+    case GV_MODE_DYING:       return "dying";
+    case GV_MODE_CAPTURED:    return "captured";
+    case GV_MODE_STAGE_CLEAR: return "stage-clear";
+    case GV_MODE_GAMEOVER:    return "game-over";
+    default:                  return "?";
+    }
+}
+
+static void trace_tick(gv_app *app) {
+    const gv_game *g = app->game;
+    if (g->mode != app->tr_mode) {
+        SDL_Log("t%-6u mode %s -> %s", g->tick, mode_label(app->tr_mode), mode_label(g->mode));
+        app->tr_mode = g->mode;
+    }
+    if (g->stage != app->tr_stage) {
+        SDL_Log("t%-6u stage %d (%s)", g->tick, g->stage,
+                g->challenge ? "challenging" : "normal");
+        app->tr_stage = g->stage;
+    }
+    if ((g->beamer >= 0) != app->tr_beam) {
+        app->tr_beam = g->beamer >= 0;
+        SDL_Log("t%-6u tractor beam: %s", g->tick, app->tr_beam ? "deploying" : "done");
+    }
+    if (g->any_captive != app->tr_captive) {
+        SDL_Log("t%-6u captive held: %s", g->tick, g->any_captive ? "yes" : "no");
+        app->tr_captive = g->any_captive;
+    }
+    if (g->rescue_active != app->tr_rescue) {
+        SDL_Log("t%-6u rescue ship: %s", g->tick, g->rescue_active ? "released" : "gone");
+        app->tr_rescue = g->rescue_active;
+    }
+    if (g->player.dual != app->tr_dual) {
+        SDL_Log("t%-6u dual fighter: %s", g->tick, g->player.dual ? "DOCKED" : "lost");
+        app->tr_dual = g->player.dual;
+    }
+}
+
+// A crude bot for soak testing (--autoplay). It walks *into* open tractor
+// beams on purpose, because getting captured, shooting the boss and docking
+// the freed fighter is the longest code path in the game and the one least
+// likely to be reached by leaving the game running unattended.
+static void autoplay_input(gv_game *g) {
+    if (g->mode == GV_MODE_ATTRACT || g->mode == GV_MODE_GAMEOVER) {
+        g->in.start = true;
+        return;
+    }
+    g->in.left = g->in.right = false;
+    g->in.fire = true;
+    if (!g->player.alive) return;
+
+    fix_t target   = g->player.x;
+    bool  have     = false;
+    bool  to_beam  = false;
+
+    // 1. an open beam - stand in it
+    for (int i = 0; i < g->en.hi && !have; i++) {
+        fix_t top, bottom, half_bot;
+        if (!gv_beam_shape(g, i, &top, &bottom, &half_bot)) continue;
+        target = g->en.x[i];
+        have = to_beam = true;
+    }
+    // 2. a freed fighter to catch
+    if (!have && g->rescue_active) { target = g->rescue_x; have = true; }
+    // 3. the boss holding our ship - shoot it off him
+    if (!have && g->any_captive)
+        for (int i = 0; i < g->en.hi && !have; i++)
+            if (g->en.captive[i]) { target = g->en.x[i]; have = true; }
+    // 4. otherwise line up under the nearest ship sitting in formation.
+    // Chasing whatever is lowest instead just walks into the divers.
+    if (!have) {
+        fix_t best = gv_fix(9999);
+        for (int i = 0; i < g->en.hi; i++) {
+            if (g->en.state[i] != GV_ES_FORM) continue;
+            const fix_t d = gv_fabs(g->en.x[i] - g->player.x);
+            if (d < best) { best = d; target = g->en.x[i]; have = true; }
+        }
+    }
+    if (!have) return;
+
+    // Sidestep anything about to land on us - except when we are walking into
+    // a beam on purpose.
+    if (!to_beam) {
+        bool  danger = false;
+        fix_t threat = 0;
+
+        for (int s = 0; s < g->es.hi && !danger; s++) {
+            if (!g->es.used[s]) continue;
+            if (g->es.y[s] < g->player.y - gv_fix(80)) continue;
+            if (gv_fabs(g->es.x[s] - g->player.x) < gv_fix(14)) { danger = true; threat = g->es.x[s]; }
+        }
+        // Anything not parked in formation is on a trajectory, so treat it as
+        // a threat once it is anywhere near our altitude.
+        for (int i = 0; i < g->en.hi && !danger; i++) {
+            const uint8_t st = g->en.state[i];
+            if (st == GV_ES_FREE || st == GV_ES_FORM) continue;
+            if (g->en.y[i] < g->player.y - gv_fix(110)) continue;
+            if (gv_fabs(g->en.x[i] - g->player.x) < gv_fix(26)) { danger = true; threat = g->en.x[i]; }
+        }
+        if (danger)
+            target = threat < g->player.x ? g->player.x + gv_fix(36)
+                                          : g->player.x - gv_fix(36);
+    }
+
+    // Hold fire while closing on a beam, otherwise the bot simply shoots the
+    // hovering boss down and never gets caught - which is good play, but not
+    // what this run is trying to exercise.
+    g->in.fire = !to_beam;
+
+    target = gv_clampf(target, gv_fix(16), gv_fix(GV_SCREEN_W - 16));
+    if (target < g->player.x - gv_fix(2))      g->in.left  = true;
+    else if (target > g->player.x + gv_fix(2)) g->in.right = true;
+}
+
+// Effects leave the simulation as data; this is where they become sound and
+// filesystem writes.
+static void drain_events(gv_app *app) {
+    gv_game *g = app->game;
+    for (int i = 0; i < g->sfx_n; i++) gv_audio_play(g->sfx[i]);
+    g->sfx_n = 0;
+
+    if (g->want_save_high) {
+        g->want_save_high = false;
+        app->save_due = true;
+    }
+    if (app->trace) trace_tick(app);
+}
 
 // Reads back the current render target. Must run before SDL_RenderPresent.
 static bool save_shot(SDL_Renderer *ren, const char *path) {
@@ -77,9 +230,23 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
             app->start_path = (uint16_t)SDL_atoi(argv[++i]);
         else if (SDL_strcmp(argv[i], "--play") == 0)
             app->start_play = true;
+        else if (SDL_strcmp(argv[i], "--mute") == 0)
+            app->start_mute = true;
+        else if (SDL_strcmp(argv[i], "--autoplay") == 0)
+            app->autoplay = true;
+        else if (SDL_strcmp(argv[i], "--trace") == 0)
+            app->trace = true;
+        else if (SDL_strcmp(argv[i], "--godmode") == 0)
+            app->godmode = true;
+        else if (SDL_strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
+            app->seed = (uint32_t)SDL_strtoul(argv[++i], nullptr, 10);
+        else if (SDL_strcmp(argv[i], "--stage") == 0 && i + 1 < argc)
+            app->start_stage = SDL_atoi(argv[++i]);
         else if (SDL_strcmp(argv[i], "--help") == 0) {
-            SDL_Log("usage: gavaga [--debug] [--path N] [--play]"
-                    " [--shot FILE.bmp] [--shot-at TICK]");
+            SDL_Log("usage: gavaga [--debug] [--path N] [--play] [--stage N]"
+                    " [--autoplay] [--godmode] [--seed N]\n"
+                    "              [--mute] [--trace]"
+                    "              [--shot FILE.bmp] [--shot-at TICK]");
             return SDL_APP_SUCCESS;
         }
     }
@@ -105,16 +272,27 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
     if (!gv_render_init(app->ren)) return SDL_APP_FAILURE;
 
+    // Audio is optional: no device means a silent game, not a failed start.
+    gv_audio_init();
+    gv_audio_set_muted(app->start_mute);
+
     app->game = SDL_calloc(1, sizeof *app->game);
     if (!app->game) {
         SDL_Log("gavaga: out of memory");
         return SDL_APP_FAILURE;
     }
     // The only allocations in the program happen above this line.
-    gv_game_init(app->game, (uint32_t)SDL_GetPerformanceCounter());
+    // A fixed seed makes a run byte-for-byte repeatable, which is the whole
+    // point of the integer-only simulation - handy for reproducing a bug or a
+    // screenshot.
+    gv_game_init(app->game,
+                 app->seed ? app->seed : (uint32_t)SDL_GetPerformanceCounter(),
+                 gv_score_load());
     app->game->debug      = app->start_debug || app->start_path != GV_PATH_NONE;
+    app->game->godmode    = app->godmode;
     app->game->debug_path = app->start_path;
-    if (app->start_play) gv_game_key(app->game, SDL_SCANCODE_R, true);
+    if (app->start_play || app->start_stage > 0 || app->autoplay)
+        gv_game_start(app->game, app->start_stage > 0 ? app->start_stage : 1);
 
     app->last_ns     = SDL_GetTicksNS();
     app->fps_mark_ns = app->last_ns;
@@ -140,6 +318,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             return SDL_APP_CONTINUE;
         }
         if (event->key.repeat) return SDL_APP_CONTINUE;
+        if (event->key.scancode == SDL_SCANCODE_M) {
+            // Mute lives outside the simulation, with the rest of the audio.
+            gv_audio_set_muted(!gv_audio_muted());
+            return SDL_APP_CONTINUE;
+        }
         gv_game_key(app->game, event->key.scancode, true);
         break;
 
@@ -159,7 +342,11 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     // Capture mode: fast-forward the simulation, draw once, write, exit.
     if (app->shot_path) {
-        while (g->tick < app->shot_at) gv_game_tick(g);
+        while (g->tick < app->shot_at) {
+            if (app->autoplay) autoplay_input(g);
+            gv_game_tick(g);
+            drain_events(app);
+        }
         gv_render_frame(g, app->ren);
         const bool ok = save_shot(app->ren, app->shot_path);
         SDL_Log("gavaga: wrote %s at tick %u", app->shot_path, g->tick);
@@ -180,6 +367,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     int ticks = 0;
     while (app->accum_ns >= GV_TICK_NS) {
         app->accum_ns -= GV_TICK_NS;
+        if (app->autoplay) autoplay_input(g);
         if (!g->paused) {
             gv_game_tick(g);
             ticks++;
@@ -188,8 +376,18 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             g->step_once = false;
             ticks++;
         }
+        // While paused the accumulated time is still consumed, just not
+        // simulated. Letting it pile up instead would burst-run every missed
+        // tick the moment you unpause.
+        drain_events(app);   // per tick, so nothing overflows the sound queue
     }
     g->ticks_last_frame = ticks;
+
+    if (app->save_due && now - app->last_save_ns >= SAVE_INTERVAL_NS) {
+        gv_score_save(g->high);
+        app->save_due     = false;
+        app->last_save_ns = now;
+    }
 
     // Rolling FPS for the debug panel.
     app->fps_frames++;
@@ -210,6 +408,10 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     gv_app *app = appstate;
     if (!app) return;
 
+    if (app->game && (app->save_due || app->game->want_save_high))
+        gv_score_save(app->game->high);
+
+    gv_audio_quit();
     gv_render_quit();
     SDL_free(app->game);
     if (app->ren) SDL_DestroyRenderer(app->ren);

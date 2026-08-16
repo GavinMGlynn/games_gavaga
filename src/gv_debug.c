@@ -13,12 +13,14 @@ static const SDL_Color STATE_COLOR[] = {
     [GV_ES_TUCK]  = { 255, 210,  80, 255 },   // amber
     [GV_ES_FORM]  = { 130, 130, 150, 255 },   // grey
     [GV_ES_DIVE]  = { 255,  90,  90, 255 },   // red
+    [GV_ES_BEAM]  = { 120, 255, 160, 255 },   // green
     [GV_ES_FLYBY] = { 230, 110, 230, 255 },   // magenta
 };
 
 static const char *const STATE_NAME[] = {
     [GV_ES_FREE] = "free", [GV_ES_ENTER] = "enter", [GV_ES_TUCK] = "tuck",
-    [GV_ES_FORM] = "form", [GV_ES_DIVE]  = "dive",  [GV_ES_FLYBY] = "flyby",
+    [GV_ES_FORM] = "form", [GV_ES_DIVE]  = "dive",  [GV_ES_BEAM] = "beam",
+    [GV_ES_FLYBY] = "flyby",
 };
 
 static const char *mode_name(uint8_t m) {
@@ -27,6 +29,7 @@ static const char *mode_name(uint8_t m) {
     case GV_MODE_READY:       return "READY";
     case GV_MODE_PLAY:        return "PLAY";
     case GV_MODE_DYING:       return "DYING";
+    case GV_MODE_CAPTURED:    return "CAUGHT";
     case GV_MODE_STAGE_CLEAR: return "CLEAR";
     case GV_MODE_GAMEOVER:    return "OVER";
     default:                  return "?";
@@ -114,7 +117,7 @@ static void draw_catalogue(const gv_game *g, SDL_Renderer *ren) {
     if (id <= GV_PATH_ENTRY_CROSS) {
         ox = gv_fix(GV_SCREEN_W / 2); oy = gv_fix(276); oa = 0;
         speed = gv_fix_from_f(1.75f);
-    } else if (id <= GV_PATH_DIVE_STRAFE) {
+    } else if (id <= GV_PATH_BEAM_DIVE) {
         ox = gv_fix(GV_SCREEN_W / 2); oy = gv_fix(72); oa = GV_ANG_180;
         speed = gv_fix_from_f(1.55f);
     } else {
@@ -156,13 +159,14 @@ static void draw_panel(const gv_game *g, SDL_Renderer *ren) {
     const SDL_FRect bg = { 0.0f, (float)(GV_SCREEN_H - 46), (float)GV_SCREEN_W, 36.0f };
     SDL_RenderFillRect(ren, &bg);
 
-    int enter = 0, tuck = 0, form = 0, dive = 0, flyby = 0;
+    int enter = 0, tuck = 0, form = 0, dive = 0, flyby = 0, beam = 0;
     for (int i = 0; i < g->en.hi; i++) {
         switch (g->en.state[i]) {
         case GV_ES_ENTER: enter++; break;
         case GV_ES_TUCK:  tuck++;  break;
         case GV_ES_FORM:  form++;  break;
         case GV_ES_DIVE:  dive++;  break;
+        case GV_ES_BEAM:  beam++;  break;
         case GV_ES_FLYBY: flyby++; break;
         default: break;
         }
@@ -175,10 +179,12 @@ static void draw_panel(const gv_game *g, SDL_Renderer *ren) {
     const int top = GV_SCREEN_H - 44;
     gv_font_printf(ren, 3, top, y, "%s ST%d T%u %.1fFPS %dTK",
                    mode_name(g->mode), g->stage, g->tick, g->fps, g->ticks_last_frame);
-    gv_font_printf(ren, 3, top + 9, w, "EN%d/%d E%d T%d F%d D%d Y%d",
-                   g->en.live, GV_MAX_ENEMIES, enter, tuck, form, dive, flyby);
-    gv_font_printf(ren, 3, top + 18, w, "PS%d ES%d FX%d HI%d STARS%d",
-                   ps, es, fx, g->en.hi, g->stars.count);
+    gv_font_printf(ren, 3, top + 9, w, "EN%d E%d T%d F%d D%d B%d Y%d",
+                   g->en.live, enter, tuck, form, dive, beam, flyby);
+    gv_font_printf(ren, 3, top + 18, w, "PS%d ES%d FX%d CAP%d%s%s",
+                   ps, es, fx, g->beamer >= 0 ? 1 : 0,
+                   g->any_captive ? " HELD" : "",
+                   g->player.dual ? " DUAL" : "");
 }
 
 // --- entry point ----------------------------------------------------------

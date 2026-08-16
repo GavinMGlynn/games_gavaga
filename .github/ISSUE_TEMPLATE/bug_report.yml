@@ -1,0 +1,49 @@
+name: Bug report
+description: Something crashes, misbehaves, or does not build
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: >
+        Steps, or a command line. `--shot`/`--shot-at`/`--path` are handy for
+        pinning down a specific moment or path.
+      placeholder: |
+        1. Start a game
+        2. Reach stage 3
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "Rocky Linux 10, Wayland / Windows 11 / macOS 15 arm64"
+    validations:
+      required: true
+
+  - type: input
+    id: compiler
+    attributes:
+      label: Compiler and CMake version
+      description: The configure output prints the compiler, e.g. "gavaga: GNU 14.3.1 (C23)"
+      placeholder: "GCC 14.3.1, CMake 3.31.8"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: Any console output, build errors, or a screenshot.
+      render: text

@@ -7,6 +7,7 @@
 #include "gv_render.h"
 #include "gv_sprite.h"
 #include "gv_font.h"
+#include "gv_audio.h"
 #include "gv_debug.h"
 
 static const SDL_Color C_WHITE = { 255, 255, 255, 255 };
@@ -37,6 +38,44 @@ void gv_draw_sprite(SDL_Renderer *ren, int spr, fix_t x, fix_t y) {
                       gv_unfix(y) - (int)src->h / 2);
 }
 
+void gv_draw_sprite_rot(SDL_Renderer *ren, int spr, fix_t x, fix_t y, ang_t a) {
+    const SDL_FRect *src = gv_sprite_rect(spr);
+    const SDL_FRect dst = { (float)(gv_unfix(x) - (int)src->w / 2),
+                            (float)(gv_unfix(y) - (int)src->h / 2),
+                            src->w, src->h };
+    const double deg = (double)a * (360.0 / 65536.0);
+    SDL_RenderTextureRotated(ren, gv_sprite_texture(), src, &dst, deg,
+                             nullptr, SDL_FLIP_NONE);
+}
+
+// --- tractor beams --------------------------------------------------------
+static void draw_beams(const gv_game *g, SDL_Renderer *ren) {
+    SDL_BlendMode prev = SDL_BLENDMODE_NONE;
+    SDL_GetRenderDrawBlendMode(ren, &prev);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+    for (int i = 0; i < g->en.hi; i++) {
+        fix_t top, bottom, half_bot;
+        if (!gv_beam_shape(g, i, &top, &bottom, &half_bot)) continue;
+
+        const int   y0 = gv_unfix(top);
+        const int   y1 = gv_unfix(bottom);
+        const float ex = (float)gv_unfix(g->en.x[i]);
+        const float hb = (float)gv_unfix(half_bot);
+
+        for (int y = y0; y <= y1; y++) {
+            const float t = y1 > y0 ? (float)(y - y0) / (float)(y1 - y0) : 0.0f;
+            const float half = (float)GV_BEAM_HALF_TOP
+                             + (hb - (float)GV_BEAM_HALF_TOP) * t;
+            // Bands scrolling down the cone sell the pulling motion.
+            const int band = ((y + (int)(g->tick * 2u)) / 4) & 1;
+            SDL_SetRenderDrawColor(ren, 150, 235, 255, band ? 150 : 60);
+            SDL_RenderLine(ren, ex - half, (float)y, ex + half, (float)y);
+        }
+    }
+    SDL_SetRenderDrawBlendMode(ren, prev);
+}
+
 // --- HUD ------------------------------------------------------------------
 static void draw_hud(const gv_game *g, SDL_Renderer *ren) {
     // Blink "1UP" like the original marquee.
@@ -57,6 +96,8 @@ static void draw_hud(const gv_game *g, SDL_Renderer *ren) {
     const int badges = gv_clampi(g->stage, 0, 8);
     for (int i = 0; i < badges; i++)
         gv_draw_sprite_px(ren, GV_SPR_BADGE, GV_SCREEN_W - 12 - i * 10, GV_SCREEN_H - 10);
+
+    if (gv_audio_muted()) gv_font_draw(ren, GV_SCREEN_W - 29, 11, C_DIM, "MUTE");
 }
 
 static void draw_mode_text(const gv_game *g, SDL_Renderer *ren) {
@@ -70,13 +111,18 @@ static void draw_mode_text(const gv_game *g, SDL_Renderer *ren) {
         if ((g->tick / 30) & 1u)
             gv_font_center(ren, 184, C_YELL, "PRESS ENTER TO START");
         gv_font_center(ren, 210, C_DIM, "ARROWS MOVE   SPACE FIRE");
-        gv_font_center(ren, 220, C_DIM, "F1 DEBUG  P PAUSE  R RESET");
+        gv_font_center(ren, 220, C_DIM, "F1 DEBUG  P PAUSE  M MUTE");
         break;
 
     case GV_MODE_READY:
         SDL_snprintf(buf, sizeof buf, "STAGE %d", g->stage);
         gv_font_center(ren, 140, C_CYAN, g->challenge ? "CHALLENGING STAGE" : buf);
         if (g->mode_timer > 40) gv_font_center(ren, 156, C_RED, "READY");
+        break;
+
+    case GV_MODE_CAPTURED:
+        if ((g->tick / 8) & 1u)
+            gv_font_center(ren, 176, C_RED, "FIGHTER CAPTURED");
         break;
 
     case GV_MODE_STAGE_CLEAR:
@@ -107,10 +153,15 @@ void gv_render_frame(const gv_game *g, SDL_Renderer *ren) {
 
     gv_star_draw(&g->stars, ren);
 
-    // Enemies.
+    // Beams go under everything so the ships stay readable inside them.
+    draw_beams(g, ren);
+
+    // Enemies, and any fighter one of them is holding.
     for (int i = 0; i < g->en.hi; i++) {
         if (g->en.state[i] == GV_ES_FREE) continue;
         gv_draw_sprite(ren, gv_enemy_sprite(g, i), g->en.x[i], g->en.y[i]);
+        if (g->en.captive[i])
+            gv_draw_sprite(ren, GV_SPR_CAPTIVE, g->en.x[i], g->en.y[i] + gv_fix(14));
     }
 
     // Player shots.
@@ -125,9 +176,29 @@ void gv_render_frame(const gv_game *g, SDL_Renderer *ren) {
         gv_draw_sprite(ren, GV_SPR_ESHOT, g->es.x[i], g->es.y[i]);
     }
 
-    // Player - flashes while the respawn invulnerability is running.
-    if (g->player.alive && (g->player.invuln == 0 || ((g->tick / 4) & 1u)))
-        gv_draw_sprite(ren, GV_SPR_PLAYER, g->player.x, g->player.y);
+    // Player - flashes while the respawn invulnerability is running, and is
+    // two hulls wide once a rescued fighter has docked.
+    if (g->player.alive && (g->player.invuln == 0 || ((g->tick / 4) & 1u))) {
+        if (g->player.dual) {
+            gv_draw_sprite(ren, GV_SPR_PLAYER,
+                           g->player.x - gv_fix(GV_DUAL_OFFSET), g->player.y);
+            gv_draw_sprite(ren, GV_SPR_PLAYER,
+                           g->player.x + gv_fix(GV_DUAL_OFFSET), g->player.y);
+        } else {
+            gv_draw_sprite(ren, GV_SPR_PLAYER, g->player.x, g->player.y);
+        }
+    }
+
+    // A freed fighter on its way down, flickering between their colours and
+    // yours as it changes hands.
+    if (g->rescue_active) {
+        const int spr = ((g->tick / 5) & 1u) ? GV_SPR_PLAYER : GV_SPR_CAPTIVE;
+        gv_draw_sprite(ren, spr, g->rescue_x, g->rescue_y);
+    }
+
+    // The capture itself: your ship spiralling up into the boss.
+    if (g->mode == GV_MODE_CAPTURED)
+        gv_draw_sprite_rot(ren, GV_SPR_PLAYER, g->cap_x, g->cap_y, g->cap_ang);
 
     // Explosions.
     for (int i = 0; i < g->fx.hi; i++) {

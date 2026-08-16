@@ -15,6 +15,8 @@ enum {
     GV_SPR_GRUNT_A, GV_SPR_GRUNT_B,
     GV_SPR_GUARD_A, GV_SPR_GUARD_B,
     GV_SPR_FLAGSHIP_A, GV_SPR_FLAGSHIP_B,
+    GV_SPR_FLAGSHIP_HURT_A, GV_SPR_FLAGSHIP_HURT_B,  // after the first hit
+    GV_SPR_CAPTIVE,                                  // your ship, in their colours
     GV_SPR_PSHOT,
     GV_SPR_ESHOT,
     GV_SPR_BOOM0, GV_SPR_BOOM1, GV_SPR_BOOM2, GV_SPR_BOOM3,

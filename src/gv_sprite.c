@@ -294,22 +294,36 @@ static const char *const ART_BADGE[] = {
     nullptr
 };
 
-static const char *const *const ART[GV_SPR_COUNT] = {
-    [GV_SPR_PLAYER]     = ART_PLAYER,
-    [GV_SPR_GRUNT_A]    = ART_GRUNT_A,
-    [GV_SPR_GRUNT_B]    = ART_GRUNT_B,
-    [GV_SPR_GUARD_A]    = ART_GUARD_A,
-    [GV_SPR_GUARD_B]    = ART_GUARD_B,
-    [GV_SPR_FLAGSHIP_A] = ART_FLAGSHIP_A,
-    [GV_SPR_FLAGSHIP_B] = ART_FLAGSHIP_B,
-    [GV_SPR_PSHOT]      = ART_PSHOT,
-    [GV_SPR_ESHOT]      = ART_ESHOT,
-    [GV_SPR_BOOM0]      = ART_BOOM0,
-    [GV_SPR_BOOM1]      = ART_BOOM1,
-    [GV_SPR_BOOM2]      = ART_BOOM2,
-    [GV_SPR_BOOM3]      = ART_BOOM3,
-    [GV_SPR_LIFE]       = ART_LIFE,
-    [GV_SPR_BADGE]      = ART_BADGE,
+// Some sprites are an existing drawing under a different palette, which beats
+// keeping two copies of the same 16 rows in step by hand. `remap` is a string
+// of from/to palette-character pairs applied while blitting.
+typedef struct {
+    const char *const *rows;
+    const char        *remap;
+} gv_art;
+
+static const gv_art ART[GV_SPR_COUNT] = {
+    [GV_SPR_PLAYER]          = { ART_PLAYER,      nullptr },
+    [GV_SPR_GRUNT_A]         = { ART_GRUNT_A,     nullptr },
+    [GV_SPR_GRUNT_B]         = { ART_GRUNT_B,     nullptr },
+    [GV_SPR_GUARD_A]         = { ART_GUARD_A,     nullptr },
+    [GV_SPR_GUARD_B]         = { ART_GUARD_B,     nullptr },
+    [GV_SPR_FLAGSHIP_A]      = { ART_FLAGSHIP_A,  nullptr },
+    [GV_SPR_FLAGSHIP_B]      = { ART_FLAGSHIP_B,  nullptr },
+    // Damaged: green/blue becomes magenta/purple/red, so one hit reads at a
+    // glance without changing the silhouette.
+    [GV_SPR_FLAGSHIP_HURT_A] = { ART_FLAGSHIP_A,  "8a9b3546" },
+    [GV_SPR_FLAGSHIP_HURT_B] = { ART_FLAGSHIP_B,  "8a9b3546" },
+    // A captured fighter: your ship repainted in their colours.
+    [GV_SPR_CAPTIVE]         = { ART_PLAYER,      "16273464" },
+    [GV_SPR_PSHOT]           = { ART_PSHOT,       nullptr },
+    [GV_SPR_ESHOT]           = { ART_ESHOT,       nullptr },
+    [GV_SPR_BOOM0]           = { ART_BOOM0,       nullptr },
+    [GV_SPR_BOOM1]           = { ART_BOOM1,       nullptr },
+    [GV_SPR_BOOM2]           = { ART_BOOM2,       nullptr },
+    [GV_SPR_BOOM3]           = { ART_BOOM3,       nullptr },
+    [GV_SPR_LIFE]            = { ART_LIFE,        nullptr },
+    [GV_SPR_BADGE]           = { ART_BADGE,       nullptr },
 };
 
 // --- baking ---------------------------------------------------------------
@@ -328,10 +342,18 @@ static int pal_index(char c) {
     return -1;   // '.' and anything else is transparent
 }
 
-static void blit_art(const char *const *rows, int ox, int oy, int *out_w, int *out_h) {
+static void blit_art(const gv_art *art, int ox, int oy, int *out_w, int *out_h) {
+    const char *const *rows = art->rows;
     int h = 0;
     while (rows[h]) h++;
     const int w = (int)SDL_strlen(rows[0]);
+
+    // Build a character substitution table from the from/to pairs.
+    unsigned char map[256];
+    for (int i = 0; i < 256; i++) map[i] = (unsigned char)i;
+    if (art->remap)
+        for (const char *p = art->remap; p[0] && p[1]; p += 2)
+            map[(unsigned char)p[0]] = (unsigned char)p[1];
 
     for (int y = 0; y < h; y++) {
         const char *row = rows[y];
@@ -339,7 +361,7 @@ static void blit_art(const char *const *rows, int ox, int oy, int *out_w, int *o
         // end, so clamp to the row's real length.
         const int rw = (int)SDL_strlen(row);
         for (int x = 0; x < w; x++) {
-            const int idx = x < rw ? pal_index(row[x]) : -1;
+            const int idx = x < rw ? pal_index((char)map[(unsigned char)row[x]]) : -1;
             uint8_t *px = &s_pixels[((size_t)(oy + y) * ATLAS_W + (size_t)(ox + x)) * 4];
             if (idx < 0) {
                 px[0] = px[1] = px[2] = px[3] = 0;
@@ -359,14 +381,13 @@ bool gv_sprite_init(SDL_Renderer *ren) {
     SDL_memset(s_pixels, 0, sizeof s_pixels);
 
     for (int i = 0; i < GV_SPR_COUNT; i++) {
-        const char *const *rows = ART[i];
-        if (!rows) continue;
+        if (!ART[i].rows) continue;
 
         const int cx = (i % GV_ATLAS_COLS) * GV_ATLAS_CELL;
         const int cy = (i / GV_ATLAS_COLS) * GV_ATLAS_CELL;
 
         int w = 0, h = 0;
-        blit_art(rows, cx, cy, &w, &h);
+        blit_art(&ART[i], cx, cy, &w, &h);
 
         if (w > GV_ATLAS_CELL || h > GV_ATLAS_CELL) {
             SDL_Log("gavaga: sprite %d is %dx%d, larger than the %dpx atlas cell",

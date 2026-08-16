@@ -50,6 +50,7 @@ enum {
     GV_PATH_DIVE_LOOP,
     GV_PATH_DIVE_ZIGZAG,
     GV_PATH_DIVE_STRAFE,
+    GV_PATH_BEAM_DIVE,       // flagship dropping into tractor-beam position
 
     // Challenging-stage flybys - never attack, just fly the pattern and leave.
     GV_PATH_FLYBY_WAVE,

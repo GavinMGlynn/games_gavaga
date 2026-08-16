@@ -9,7 +9,7 @@
 
 // --- pool capacities ------------------------------------------------------
 #define GV_MAX_ENEMIES 64
-#define GV_MAX_PSHOTS   6
+#define GV_MAX_PSHOTS   8
 #define GV_MAX_ESHOTS  24
 #define GV_MAX_FX      24
 
@@ -26,6 +26,16 @@
 #define GV_FORM_VGAP  18
 #define GV_FORM_HGAP  17
 
+// --- tractor beam ---------------------------------------------------------
+// The cone has to reach past the player's row to be able to catch anything.
+// A flagship finishes its approach around y=142 and the player sits at y=252,
+// so anything under ~110 here is a beam that can never work.
+#define GV_BEAM_LEN      128   // how far the cone reaches below the flagship
+#define GV_BEAM_HALF_TOP 4
+#define GV_BEAM_HALF_BOT 34
+
+#define GV_DUAL_OFFSET   8     // px from centre to each hull of a dual fighter
+
 enum { GV_EK_GRUNT = 0, GV_EK_GUARD, GV_EK_FLAGSHIP, GV_EK_COUNT };
 
 enum {
@@ -34,7 +44,17 @@ enum {
     GV_ES_TUCK,      // steering into its formation slot
     GV_ES_FORM,      // parked in formation
     GV_ES_DIVE,      // flying a dive path
+    GV_ES_BEAM,      // flagship running a tractor-beam capture
     GV_ES_FLYBY,     // challenging-stage pass; despawns at the end
+};
+
+// Phases of GV_ES_BEAM, held in gv_enemies.phase.
+enum {
+    GV_BEAM_APPROACH = 0,   // flying the approach path
+    GV_BEAM_OPEN,           // cone growing
+    GV_BEAM_HOLD,           // cone full - this is when the player can be caught
+    GV_BEAM_CLOSE,          // cone shrinking
+    GV_BEAM_LEAVE,          // heading back to formation
 };
 
 enum {
@@ -42,8 +62,30 @@ enum {
     GV_MODE_READY,
     GV_MODE_PLAY,
     GV_MODE_DYING,
+    GV_MODE_CAPTURED,       // the beam got you: ship spirals up into the boss
     GV_MODE_STAGE_CLEAR,
     GV_MODE_GAMEOVER,
+};
+
+// Game events the simulation emits for something outside to act on. Keeping
+// them as data is what lets gv_game.c stay free of the audio device.
+#define GV_SFX_QUEUE 24
+enum {
+    GV_SFX_NONE = 0,
+    GV_SFX_SHOT,
+    GV_SFX_ENEMY_BOOM,
+    GV_SFX_FLAGSHIP_HIT,
+    GV_SFX_FLAGSHIP_BOOM,
+    GV_SFX_PLAYER_BOOM,
+    GV_SFX_DIVE,
+    GV_SFX_BEAM,
+    GV_SFX_CAPTURED,
+    GV_SFX_RESCUE,
+    GV_SFX_EXTRA_LIFE,
+    GV_SFX_STAGE,
+    GV_SFX_GAMEOVER,
+    GV_SFX_PERFECT,
+    GV_SFX_COUNT
 };
 
 // --- pools ----------------------------------------------------------------
@@ -57,6 +99,8 @@ typedef struct {
     uint8_t        kind[GV_MAX_ENEMIES];
     uint8_t        slot[GV_MAX_ENEMIES];
     uint8_t        hp[GV_MAX_ENEMIES];
+    uint8_t        phase[GV_MAX_ENEMIES];    // GV_BEAM_* while in GV_ES_BEAM
+    uint8_t        captive[GV_MAX_ENEMIES];  // holding a captured fighter
     uint16_t       timer[GV_MAX_ENEMIES];
     uint16_t       fire_cd[GV_MAX_ENEMIES];
 
@@ -105,6 +149,7 @@ typedef struct {
     uint16_t cooldown;
     uint16_t invuln;
     bool     alive;
+    bool     dual;      // rescued fighter docked: two ships, twin shots
 } gv_player;
 
 typedef struct {
@@ -145,6 +190,7 @@ typedef struct {
     bool         challenge;     // challenging stage: flybys, no formation
     uint32_t     score;
     uint32_t     high;
+    uint32_t     next_extra;    // score at which the next spare ship is awarded
 
     // Wave launcher progress: one counter pair per group, so groups can
     // overlap in time rather than running strictly one after another.
@@ -157,7 +203,31 @@ typedef struct {
     uint16_t     dive_timer;
     int          divers;
 
+    // Tractor beam. Two separate roles, because they do not end together:
+    // `beamer` is whoever is projecting a cone right now and is cleared when
+    // the cone closes, while `captor` is whoever actually caught the ship and
+    // must survive until the pull-up animation finishes. Both are -1 when idle.
+    int          beamer;
+    int          captor;
+    bool         any_captive;   // some flagship is holding a fighter
+    uint16_t     capture_cd;    // ticks before another capture may be tried
+    fix_t        cap_x, cap_y;  // the ship being drawn up during the capture
+    ang_t        cap_ang;
+
+    // A freed fighter flying down to dock with the player.
+    bool         rescue_active;
+    fix_t        rescue_x, rescue_y;
+
+    // Effects leaving the simulation as data.
+    uint8_t      sfx[GV_SFX_QUEUE];
+    int          sfx_n;
+    bool         want_save_high;
+
     bool         debug;         // overlay on
+    bool         godmode;       // debug: collisions cannot kill the player.
+                                // Distinct from invuln, which also blocks the
+                                // tractor beam - god mode still lets you be
+                                // captured, so soak runs exercise that path.
     bool         paused;
     bool         step_once;
     uint16_t     debug_path;    // GV_PATH_NONE, or a path to show on its own
@@ -168,14 +238,22 @@ typedef struct {
 } gv_game;
 
 // --- API ------------------------------------------------------------------
-void gv_game_init(gv_game *g, uint32_t seed);
+void gv_game_init(gv_game *g, uint32_t seed, uint32_t high);
 void gv_game_tick(gv_game *g);
 void gv_game_key(gv_game *g, SDL_Scancode sc, bool down);
+
+// Begin a fresh game at the given stage. Stage 1 in normal play; the higher
+// stages are reachable from the command line for testing late-game content.
+void gv_game_start(gv_game *g, int stage);
 
 // Formation slot position, in 16.16. Used by the game and the debug overlay.
 void gv_form_slot_pos(const gv_game *g, int slot, fix_t *out_x, fix_t *out_y);
 
 int  gv_enemy_sprite(const gv_game *g, int i);
 void gv_spawn_fx(gv_game *g, fix_t x, fix_t y, bool big);
+
+// Vertical extent and half-width of an active tractor beam, for drawing and
+// for the catch test. Returns false when the enemy is not projecting one.
+bool gv_beam_shape(const gv_game *g, int i, fix_t *top, fix_t *bottom, fix_t *half_bot);
 
 #endif // GV_GAME_H

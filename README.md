@@ -1,5 +1,10 @@
 # Gavaga
 
+[![build](https://github.com/GavinMGlynn/games_gavaga/actions/workflows/build.yml/badge.svg)](https://github.com/GavinMGlynn/games_gavaga/actions/workflows/build.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![C23](https://img.shields.io/badge/C-23-informational.svg)](CMakeLists.txt)
+[![SDL3](https://img.shields.io/badge/SDL-3.2.30-informational.svg)](https://github.com/libsdl-org/SDL)
+
 A Galaga-inspired fixed shooter in C23 and SDL3. Not a clone of the original —
 its own art, its own tables — but built on the same architecture the arcade
 hardware used: a 224×288 playfield, logic locked to 60.606 Hz, an LFSR
@@ -23,12 +28,34 @@ compiler, CMake 3.28+, and the usual X11/Wayland dev headers on Linux.
 | ← → / A D | move |
 | Space / Z / Ctrl | fire (two shots on screen, like the original) |
 | Enter | start |
+| M | mute |
 | F1 | debug overlay |
 | F3 | cycle the path catalogue |
 | P / F2 | pause / single-step one tick |
 | R | restart |
 | F11 / Alt-Enter | fullscreen |
 | Esc | quit |
+
+## Rules worth knowing
+
+**Lose a ship and the stage restarts** from the beginning.
+
+**The tractor beam.** From stage 2, a flagship will occasionally drop out of
+formation, hang over the playfield and open a cone beneath itself. Get caught
+and it costs you a ship — but *not* the stage, deliberately: the boss stays on
+screen carrying your fighter, and shooting him down sets it free. Catch the
+freed fighter on its way back and it docks alongside you as a **dual fighter**:
+twice as wide, twice the firepower, and twice as easy to hit. Die and you lose
+it.
+
+**Flagships take two hits** and repaint from green to magenta after the first,
+so you can see which ones are one shot from dead.
+
+Every third stage is a **challenging stage** — nothing shoots back, nothing
+joins the formation, and clearing the lot is worth a bonus. Dive speed, fire
+rate and the number of simultaneous attackers all scale with the stage number.
+A spare ship arrives at 20,000 points and every 60,000 after that. The high
+score is kept between sessions.
 
 ## The path interpreter
 
@@ -76,10 +103,12 @@ does, so what you see is exactly where it will go.
 | | |
 |---|---|
 | `gv_path.c` / `gv_paths.c` | the turn-table interpreter and the tables |
-| `gv_game.c` | simulation: pools, formation, waves, collisions. Touches no renderer, no clock, no heap |
+| `gv_game.c` | simulation: pools, formation, waves, collisions, tractor beam. Touches no renderer, no clock, no filesystem, no heap |
 | `gv_star.c` | LFSR starfield |
 | `gv_sprite.c` | placeholder art as ASCII rows, baked to one atlas at startup |
 | `gv_render.c` | all drawing |
+| `gv_audio.c` | the synth: no sound files, everything generated at runtime |
+| `gv_score.c` | the persistent high score |
 | `gv_debug.c` | the F1/F3 overlay |
 | `gv_math.c` | integer sin/cos/atan tables |
 | `main.c` | SDL3 callbacks and the fixed-timestep loop |
@@ -102,7 +131,13 @@ the line where that stops is marked in `main.c`.
 
 **Determinism.** Gameplay uses 16.16 fixed point and an integer trig table, and
 a xorshift32 RNG rather than libc's. Same seed, same inputs, same game on any
-platform.
+platform — `--seed N` makes that usable, and two runs with the same seed
+produce byte-identical traces.
+
+**Effects leave as data.** The simulation never plays a sound or writes a file;
+it appends game events to a queue and sets a flag, and `main.c` turns those
+into audio and a high-score write. That is what keeps `gv_game.c` testable and
+deterministic.
 
 **SDL3 error convention.** Most SDL3 functions return `bool`, `true` on
 success — the inverse of SDL2, where `0` meant OK.
@@ -116,6 +151,13 @@ with the classic maximal-length polynomial `x¹⁶ + x¹⁴ + x¹³ + x¹¹ + 1`
 the virtual field once at init and keeping the ~125 hits in a fixed array. Same
 distribution as clocking it live, but free per frame. Four blink groups cycle to
 twinkle, and scroll speed is set per game state.
+
+## Sound
+
+No audio files either. Each effect is a waveform, a frequency sweep and an
+envelope, mixed per sample on the audio thread in `gv_audio.c`; longer cues are
+short note lists. If there is no audio device — headless CI, say — the game
+logs it and runs silently rather than failing to start.
 
 ## Art
 
@@ -213,7 +255,7 @@ single self-contained binary.
 | `GAVAGA_WERROR` | `OFF` | warnings are errors |
 | `GAVAGA_ASAN` | `OFF` | address + UB sanitizers |
 
-## Headless capture
+## Headless capture and soak testing
 
 Useful for CI and for eyeballing a change without opening a window: the
 simulation is fast-forwarded to a tick, one frame is drawn and written, and the
@@ -221,19 +263,35 @@ program exits.
 
 ```sh
 SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
-    ./build/gavaga --play --debug --shot frame.bmp --shot-at 1500
+    ./build/gavaga --play --debug --seed 1 --shot frame.bmp --shot-at 1500
 ```
 
-`--play` starts a game immediately, `--debug` turns the overlay on, `--path N`
-opens the catalogue on path `N`.
+`--autoplay` adds a bot that deliberately walks into tractor beams, so an
+unattended run exercises capture, rescue and the dual fighter; `--godmode`
+keeps it alive to reach later stages, and `--trace` prints state transitions
+with their tick so you can point `--shot-at` at the exact moment something
+happened. The full list is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Where to go next
 
-Not in yet, roughly in the order I'd add them:
+- **More stage layouts.** There are two, alternating, plus the challenging
+  stage. The wave tables are cheap to add to.
+- **Bonus scoring for a full formation kill**, and the mid-dive score
+  multipliers the original had.
+- **Gamepad support.** SDL3 has everything needed; nothing is wired up.
+- **Attract-mode demo play**, driving the real game rather than just showing
+  the entry paths.
+- **A proper mixer** — the synth is deliberately tiny, with no filters,
+  reverb, or music bed.
 
-- **Audio.** No sound at all right now.
-- **The tractor beam.** A flagship capturing the player's ship, and shooting it
-  free for the dual fighter. The path system already has what it needs.
-- **Two-hit flagships changing colour** on the first hit, as a visible tell.
-- **Per-stage difficulty** beyond dive frequency — speed and fire rate scale.
-- **Persistent high score.**
+## Contributing
+
+Bug reports and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+for the build, the house style, and how to draw new path tables. By taking part
+you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Licence
+
+[MIT](LICENSE). The art, sound and path tables are all original work written
+for this repository; no Namco assets are included, and please do not contribute
+any.

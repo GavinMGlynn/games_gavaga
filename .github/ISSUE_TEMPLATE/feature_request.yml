@@ -1,0 +1,34 @@
+name: Idea or feature request
+description: Suggest a gameplay change, a path table, or anything else
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like, and what problem does it solve?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Enemy movement / path tables
+        - Gameplay rules
+        - Rendering or art
+        - Audio
+        - Build, CI, or portability
+        - Debug tooling
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: >
+        Sketches, references, or a path table you have already tried. If it is
+        a movement idea, a screenshot from the F3 path catalogue is ideal.
