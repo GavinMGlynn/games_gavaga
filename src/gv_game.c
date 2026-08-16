@@ -96,8 +96,11 @@ typedef struct {
 static const gv_group STAGE_A[] = {
     {  30, 10, 10, GV_PATH_ENTRY_LOOP,   +1,  -20, 300,  14, 20, 0 },
     {  40, 10, 10, GV_PATH_ENTRY_LOOP,   -1,  244, 300, 346, 30, 0 },
-    { 300,  8, 11, GV_PATH_ENTRY_S,      +1,   96, 312,   0,  4, 0 },
-    { 310,  8, 11, GV_PATH_ENTRY_S,      -1,  128, 312,   0, 12, 0 },
+    // Bottom entries launch from the flanks, never up the middle: the player
+    // starts centred and watches the top of the screen, so a ship rising
+    // through x=112 kills them from behind with nothing to react to.
+    { 300,  8, 11, GV_PATH_ENTRY_S,      +1,   40, 312,   0,  4, 0 },
+    { 310,  8, 11, GV_PATH_ENTRY_S,      -1,  184, 312,   0, 12, 0 },
     { 560,  4, 14, GV_PATH_ENTRY_SPIRAL, +1,  -20, 150,  90,  0, 0 },
 };
 
@@ -120,8 +123,8 @@ static const gv_group STAGE_C[] = {
 
 // S-curves up the middle, then shallow crossing runs, bosses last.
 static const gv_group STAGE_D[] = {
-    {  30, 10, 10, GV_PATH_ENTRY_S,      +1,   88, 312,   0, 20, 0 },
-    {  40, 10, 10, GV_PATH_ENTRY_S,      -1,  136, 312,   0, 30, 0 },
+    {  30, 10, 10, GV_PATH_ENTRY_S,      +1,   40, 312,   0, 20, 0 },
+    {  40, 10, 10, GV_PATH_ENTRY_S,      -1,  184, 312,   0, 30, 0 },
     { 300,  8, 11, GV_PATH_ENTRY_CROSS,  +1,  -20, 240,  55,  4, 0 },
     { 310,  8, 11, GV_PATH_ENTRY_CROSS,  -1,  244, 240, 305, 12, 0 },
     { 560,  4, 14, GV_PATH_ENTRY_SPIRAL, -1,  244, 150, 270,  0, 0 },
@@ -927,6 +930,13 @@ static void collide(gv_game *g) {
     // enemy bodies -> player
     for (int i = 0; i < g->en.hi; i++) {
         if (g->en.state[i] == GV_ES_FREE) continue;
+
+        // A ship still flying its entry cannot kill you from underneath. You
+        // are watching the top of the screen; something climbing into you from
+        // behind is a death you had no way to react to. Once it is level with
+        // you or above, it is fair game again - and divers always are.
+        if (g->en.state[i] == GV_ES_ENTER && g->en.y[i] > g->player.y) continue;
+
         const int half = KIND_HALF[g->en.kind[i]];
         if (overlap(g->en.x[i], g->en.y[i], half, g->player.x, g->player.y,
                     php, PLAYER_HALF_Y)) {

@@ -207,6 +207,12 @@ bool gv_audio_init(void) {
 
     SDL_ResumeAudioStreamDevice(s_stream);
     s_ok = true;
+
+    // Worth saying out loud: "no sound" is usually the driver being a fallback
+    // or the host not wiring the device up, and that is invisible otherwise.
+    const char *drv = SDL_GetCurrentAudioDriver();
+    SDL_Log("gavaga: audio driver '%s', %d Hz mono f32",
+            drv ? drv : "?", GV_SR);
     return true;
 }
 
