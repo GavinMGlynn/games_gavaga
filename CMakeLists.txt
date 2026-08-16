@@ -97,6 +97,14 @@ else()
         set(SDL_SHARED OFF CACHE BOOL "" FORCE)
         set(SDL_STATIC ON  CACHE BOOL "" FORCE)
     endif()
+    # An Xbox pad speaks a vendor-specific protocol, so on Linux it needs either
+    # the kernel's xpad or SDL talking to it through libusb. WSL2 has no xpad, so
+    # without this the pad is invisible there. If libusb is missing at configure
+    # time SDL just turns it back off, which is the behaviour we had before.
+    if(UNIX AND NOT APPLE)
+        set(SDL_HIDAPI_LIBUSB ON CACHE BOOL "" FORCE)
+    endif()
+
     set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
     set(SDL_TESTS        OFF CACHE BOOL "" FORCE)
     set(SDL_EXAMPLES     OFF CACHE BOOL "" FORCE)

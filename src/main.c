@@ -631,7 +631,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         switch (event->gbutton.button) {
-        case SDL_GAMEPAD_BUTTON_START: app->edge_start = true; break;
+        // A and X start a game as well as Start. Reaching for Start to begin
+        // and then a face button to shoot is a needless hop, and the arcade
+        // habit is to press the thing you are about to fire with. They keep
+        // firing too - the start action is only read in attract, game-over and
+        // ready, so in play it costs nothing.
+        case SDL_GAMEPAD_BUTTON_SOUTH:   // A
+        case SDL_GAMEPAD_BUTTON_WEST:    // X
+        case SDL_GAMEPAD_BUTTON_START:
+            app->edge_start = true;
+            break;
         case SDL_GAMEPAD_BUTTON_BACK:  gv_game_action(g, GV_ACT_PAUSE, true); break;
         default: break;
         }

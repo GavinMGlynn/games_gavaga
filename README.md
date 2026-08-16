@@ -27,7 +27,7 @@ compiler, CMake 3.28+, and the usual X11/Wayland dev headers on Linux.
 |---|---|---|
 | ← → / A D | left stick or d-pad | move |
 | Space / Z / Ctrl | any face button, shoulder or trigger | fire |
-| Enter | Start | start |
+| Enter | A, X or Start | start |
 | P | Back | pause |
 | M | | mute |
 | F1 | | open the debug window |
@@ -287,7 +287,7 @@ a keyword, not a macro — `<stddef.h>` only supplies `nullptr_t`.)
 sudo apt install build-essential git cmake ninja-build \
     libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev \
     libwayland-dev libxkbcommon-dev libdecor-0-dev libgl-dev libegl-dev \
-    libpulse-dev libasound2-dev libdbus-1-dev libudev-dev
+    libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev
 # if the default gcc is older than 14:
 sudo apt install gcc-14 && cmake -B build -DCMAKE_C_COMPILER=gcc-14
 ```
@@ -301,7 +301,7 @@ sudo dnf install --enablerepo=crb cmake ninja-build git gcc \
     libX11-devel libXext-devel libXrandr-devel libXi-devel libXcursor-devel \
     wayland-devel wayland-protocols-devel libxkbcommon-devel libdecor-devel \
     mesa-libGL-devel mesa-libEGL-devel pulseaudio-libs-devel alsa-lib-devel \
-    dbus-devel systemd-devel
+    dbus-devel systemd-devel libusb1-devel
 cmake -B build && cmake --build build -j
 ```
 
@@ -313,7 +313,7 @@ sudo dnf install --enablerepo=crb gcc-toolset-14 cmake ninja-build git \
     libX11-devel libXext-devel libXrandr-devel libXi-devel libXcursor-devel \
     wayland-devel wayland-protocols-devel libxkbcommon-devel libdecor-devel \
     mesa-libGL-devel mesa-libEGL-devel pulseaudio-libs-devel alsa-lib-devel \
-    dbus-devel systemd-devel
+    dbus-devel systemd-devel libusb1-devel
 scl enable gcc-toolset-14 -- cmake -B build
 scl enable gcc-toolset-14 -- cmake --build build -j
 ```
