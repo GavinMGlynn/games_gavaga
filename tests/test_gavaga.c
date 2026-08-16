@@ -331,6 +331,51 @@ static void test_soak_invariants(void) {
     SDL_free(g);
 }
 
+// --- enemy shots must always travel downward ------------------------------
+// A diver used to keep firing after it drew level with the ship, and gv_dir()
+// would hand back a sideways or upward heading: bullets raked across the
+// bottom of the screen, and an enemy underneath the player shot straight up.
+static void test_enemy_shots_aim_down(void) {
+    SECTION("enemy shots travel downward");
+
+    gv_game *g = SDL_calloc(1, sizeof *g);
+    if (!g) { printf("  FAIL out of memory\n"); g_fails++; return; }
+    gv_game_init(g, 4242u, 0);
+    gv_game_start(g, 1);
+    g->godmode = true;
+
+    uint8_t prev[GV_MAX_ESHOTS] = {0};
+    long spawned = 0, not_down = 0;
+    int32_t worst_yaw = 0;
+
+    for (int t = 0; t < 200000; t++) {
+        gv_game_demo(g);
+        gv_game_tick(g);
+
+        for (int s = 0; s < GV_MAX_ESHOTS; s++) {
+            if (g->es.used[s] && !prev[s]) {       // spawned on this tick
+                spawned++;
+                if (g->es.vy[s] <= 0) not_down++;  // level or climbing
+                int32_t yaw = gv_angdiff(GV_ANG_180, gv_dir(g->es.vx[s], g->es.vy[s]));
+                if (yaw < 0) yaw = -yaw;
+                if (yaw > worst_yaw) worst_yaw = yaw;
+            }
+            prev[s] = g->es.used[s];
+        }
+    }
+
+    // A sample this long with no shots at all would make the test vacuous.
+    CHECK(spawned > 500, "only %ld enemy shots in 200k ticks - test is not exercising anything", spawned);
+    CHECK(not_down == 0, "%ld of %ld enemy shots were level or upward", not_down, spawned);
+
+    // One degree of slack for the atan table's quantisation.
+    const int32_t limit = (int32_t)GV_ANG_DEG(51);
+    CHECK(worst_yaw <= limit, "shot aimed %.1f deg off vertical, cone is 50",
+          worst_yaw * 360.0 / 65536.0);
+
+    SDL_free(g);
+}
+
 int main(void) {
     printf("gavaga tests\n");
     test_fixed();
@@ -340,6 +385,7 @@ int main(void) {
     test_formation();
     test_determinism();
     test_soak_invariants();
+    test_enemy_shots_aim_down();
 
     printf("\n%d checks, %d failed\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

@@ -14,6 +14,8 @@
 #define PSHOT_LIMIT_DUAL 4
 #define PSHOT_SPEED      gv_fix_from_f(4.50f)
 #define ESHOT_SPEED      gv_fix_from_f(2.00f)
+#define ESHOT_MIN_DROP   gv_fix(16)             // diver must be this far above the ship
+#define ESHOT_MAX_YAW    GV_ANG_DEG(50)         // and aim within this of straight down
 
 #define ENTRY_SPEED      gv_fix_from_f(1.75f)
 #define DIVE_SPEED       gv_fix_from_f(1.55f)
@@ -415,10 +417,25 @@ static void enemy_start_dive(gv_game *g, int i) {
 
 static void enemy_fire(gv_game *g, int i) {
     if (!g->player.alive) return;
+
+    // An aimed shot only makes sense while the diver is still above the ship.
+    // Level with it - or already past it, on the way off the bottom - gv_dir()
+    // returns a sideways or upward heading, and the shot rakes across the
+    // screen or flies back up it. Hold fire instead.
+    const fix_t dy = g->player.y - g->en.y[i];
+    if (dy < ESHOT_MIN_DROP) return;
+
+    // Even from above, a diver far out to the side aims nearly flat. Keep the
+    // shot inside a cone about straight down: it still leads the player, but a
+    // wide angle becomes a near miss rather than a horizontal streak.
+    ang_t dir = gv_dir(g->player.x - g->en.x[i], dy);
+    const int32_t yaw = gv_angdiff(GV_ANG_180, dir);
+    if (yaw >  (int32_t)ESHOT_MAX_YAW) dir = (ang_t)(GV_ANG_180 + ESHOT_MAX_YAW);
+    if (yaw < -(int32_t)ESHOT_MAX_YAW) dir = (ang_t)(GV_ANG_180 - ESHOT_MAX_YAW);
+
     const int s = eshot_alloc(&g->es);
     if (s < 0) return;
 
-    const ang_t dir = gv_dir(g->player.x - g->en.x[i], g->player.y - g->en.y[i]);
     g->es.x[s]  = g->en.x[i];
     g->es.y[s]  = g->en.y[i];
     g->es.vx[s] = gv_vx(dir, ESHOT_SPEED);
