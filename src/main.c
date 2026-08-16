@@ -18,6 +18,7 @@
 #include "gv_font.h"
 #include "gv_audio.h"
 #include "gv_score.h"
+#include "gv_window.h"
 
 // The high score is written at most this often while playing, plus once on
 // exit - otherwise leading the board would mean a file write per point.
@@ -76,6 +77,10 @@ typedef struct {
     bool     save_due;
     uint64_t last_save_ns;
     bool     vsync_on;
+
+    // Where the window was last run, and what the window manager did to the
+    // position we asked for. See gv_window.c.
+    gv_window_state win_state;
 
     // Frame-pacing telemetry, printed with --trace.
     uint64_t frame_worst_ns;
@@ -295,12 +300,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         }
     }
 
+    // An explicit --scale is an instruction, so it wins over the saved size.
     const int scale = app->scale > 0 ? app->scale : WINDOW_SCALE;
-    if (!SDL_CreateWindowAndRenderer("Gavaga",
-                                     GV_SCREEN_W * scale,
-                                     GV_SCREEN_H * scale,
-                                     SDL_WINDOW_RESIZABLE,
-                                     &app->win, &app->ren)) {
+    app->win = gv_window_create("Gavaga",
+                                GV_SCREEN_W * scale,
+                                GV_SCREEN_H * scale,
+                                SDL_WINDOW_RESIZABLE,
+                                &app->win_state);
+    if (app->win && app->scale > 0)
+        SDL_SetWindowSize(app->win, GV_SCREEN_W * scale, GV_SCREEN_H * scale);
+
+    if (!app->win || !(app->ren = SDL_CreateRenderer(app->win, nullptr))) {
         SDL_Log("gavaga: could not create window/renderer: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
@@ -357,6 +367,15 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
             rname ? rname : "?", app->vsync_on ? "on" : "off");
     SDL_Log("gavaga: %dx%d logical, logic at %.3f Hz (%llu ns/tick)",
             GV_SCREEN_W, GV_SCREEN_H, GV_TICK_HZ, (unsigned long long)GV_TICK_NS);
+    {
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(app->win, &ww, &wh);
+        if (app->win_state.placed)
+            SDL_Log("gavaga: window %dx%d restored to %d,%d",
+                    ww, wh, app->win_state.ask_x, app->win_state.ask_y);
+        else
+            SDL_Log("gavaga: window %dx%d, placement left to the window manager", ww, wh);
+    }
     return SDL_APP_CONTINUE;
 }
 
@@ -368,6 +387,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     switch (event->type) {
     case SDL_EVENT_QUIT:
         return SDL_APP_SUCCESS;
+
+    case SDL_EVENT_WINDOW_MOVED:
+        // Tells gv_window where the window manager actually put us, which is
+        // not what SDL_GetWindowPosition says immediately after creation.
+        if (event->window.windowID == SDL_GetWindowID(app->win))
+            gv_window_moved(&app->win_state, app->win);
+        return SDL_APP_CONTINUE;
 
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         // Closing the debug window just puts the view away; closing the game
@@ -558,6 +584,19 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 
     if (app->game && (app->save_due || app->game->want_save_high))
         gv_score_save(app->game->high);
+
+    // Not for --shot: that run's window is a capture buffer, not a place the
+    // player put anything.
+    if (!app->shot_path) {
+        if (app->trace && app->win) {
+            int x = 0, y = 0;
+            SDL_GetWindowPosition(app->win, &x, &y);
+            SDL_Log("gavaga: window at %d,%d on exit, wm offset %+d,%+d -> saving %d,%d",
+                    x, y, app->win_state.bias_x, app->win_state.bias_y,
+                    x - app->win_state.bias_x, y - app->win_state.bias_y);
+        }
+        gv_window_save(app->win, &app->win_state);
+    }
 
     pad_close(app);
     debug_window_close(app);

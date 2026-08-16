@@ -293,6 +293,29 @@ happened. The full list is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Troubleshooting
 
+**The window opens somewhere odd.** Its position, size and maximized state are
+remembered between runs, in `window.txt` next to the high score
+(`~/.local/share/gavaga/gavaga/` on Linux, `%APPDATA%` on Windows,
+`~/Library/Application Support` on macOS). Delete that file to get the default
+placement back. A saved position that no longer lands on any connected display
+is ignored, so unplugging a monitor cannot strand the window off-screen:
+
+```
+gavaga: saved window position is off-screen, using the default
+```
+
+`--scale` overrides the remembered size. Fullscreen is deliberately not
+persisted.
+
+Note that some window managers do not place a window exactly where they are
+asked — WSLg's puts it a few pixels off, consistently. Saving the reported
+position and restoring it verbatim would walk the window down the screen a
+little further on every launch, so the offset is measured at startup and taken
+back off before saving. It is learned from the first window-move event, because
+`SDL_GetWindowPosition` does not return anything useful until the window has
+actually been placed. A window manager that honours the request exactly sends
+no such event and the whole correction stays zero.
+
 **No sound.** The attract screen is silent on purpose — press Enter to start a
 game and you should get a four-note stage jingle immediately. If a *game* is
 silent, check the startup log, which names the driver it actually opened:
