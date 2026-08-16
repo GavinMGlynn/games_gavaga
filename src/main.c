@@ -74,6 +74,9 @@ typedef struct {
     uint32_t    seed;
     bool        seed_set;
 
+    bool     pad_rumbles;   // the pad reports rumble support
+    bool     no_rumble;     // --no-rumble
+
     bool     save_due;
     uint64_t last_save_ns;
     bool     vsync_on;
@@ -138,11 +141,48 @@ static void trace_tick(gv_app *app) {
     }
 }
 
+// --- rumble ---------------------------------------------------------------
+// The simulation already hands its effects out as data, so the pad reads the
+// same queue the synth does and nothing in gv_game.c has to know a pad exists.
+//
+// GV_SFX_SHOT is deliberately absent. With two shots allowed on screen and a
+// ten-tick cooldown it fires several times a second for the whole game, which
+// is a continuous buzz rather than feedback.
+typedef struct { uint16_t lo, hi; uint32_t ms; } gv_rumbledef;
+
+static const gv_rumbledef RUMBLE[GV_SFX_COUNT] = {
+    [GV_SFX_PLAYER_BOOM]   = { 0xE000, 0xB000, 480 },   // losing a ship
+    [GV_SFX_CAPTURED]      = { 0x9000, 0x4000, 400 },   // dragged up the beam
+    [GV_SFX_FLAGSHIP_BOOM] = { 0x8000, 0x5000, 240 },
+    [GV_SFX_BEAM]          = { 0x2800, 0x1000, 320 },   // a cone opening on you
+    [GV_SFX_ENEMY_BOOM]    = { 0x3000, 0x1800,  80 },
+    [GV_SFX_RESCUE]        = { 0x3000, 0x6000, 200 },
+    [GV_SFX_EXTRA_LIFE]    = { 0x3000, 0x6000, 200 },
+    [GV_SFX_FLAGSHIP_HIT]  = { 0x1800, 0x2800,  50 },
+};
+
+// One rumble per tick, the strongest of whatever happened. Restarting the
+// effect for each event in the queue would let a busy tick cut its own biggest
+// jolt short.
+static void pad_rumble(gv_app *app) {
+    if (!app->pad_dev || !app->pad_rumbles || app->no_rumble) return;
+
+    const gv_rumbledef *best = nullptr;
+    const gv_game *g = app->game;
+    for (int i = 0; i < g->sfx_n; i++) {
+        const gv_rumbledef *d = &RUMBLE[g->sfx[i]];
+        if (!d->ms) continue;
+        if (!best || (uint32_t)d->lo + d->hi > (uint32_t)best->lo + best->hi) best = d;
+    }
+    if (best) SDL_RumbleGamepad(app->pad_dev, best->lo, best->hi, best->ms);
+}
+
 // Effects leave the simulation as data; this is where they become sound and
 // filesystem writes.
 static void drain_events(gv_app *app) {
     gv_game *g = app->game;
     for (int i = 0; i < g->sfx_n; i++) gv_audio_play(g->sfx[i]);
+    pad_rumble(app);
     g->sfx_n = 0;
 
     if (g->want_save_high) {
@@ -164,8 +204,14 @@ static void pad_open_first(gv_app *app) {
         app->pad_dev = SDL_OpenGamepad(ids[i]);
         if (app->pad_dev) {
             app->pad_id = ids[i];
+            app->pad_rumbles = SDL_GetBooleanProperty(
+                SDL_GetGamepadProperties(app->pad_dev),
+                SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
             const char *name = SDL_GetGamepadName(app->pad_dev);
-            SDL_Log("gavaga: gamepad connected: %s", name ? name : "unnamed");
+            SDL_Log("gavaga: gamepad connected: %s (rumble %s)",
+                    name ? name : "unnamed",
+                    app->no_rumble  ? "disabled" :
+                    app->pad_rumbles ? "supported" : "not supported");
         }
     }
     SDL_free(ids);
@@ -173,9 +219,13 @@ static void pad_open_first(gv_app *app) {
 
 static void pad_close(gv_app *app) {
     if (!app->pad_dev) return;
+    // Stop any effect still running, or the pad can be left buzzing after the
+    // program has gone.
+    if (app->pad_rumbles) SDL_RumbleGamepad(app->pad_dev, 0, 0, 0);
     SDL_CloseGamepad(app->pad_dev);
-    app->pad_dev = nullptr;
-    app->pad_id  = 0;
+    app->pad_dev     = nullptr;
+    app->pad_id      = 0;
+    app->pad_rumbles = false;
     SDL_zero(app->pad);
     SDL_Log("gavaga: gamepad disconnected");
 }
@@ -292,9 +342,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         }
         else if (SDL_strcmp(argv[i], "--trace") == 0)
             app->trace = true;
+        else if (SDL_strcmp(argv[i], "--no-rumble") == 0)
+            app->no_rumble = true;
         else if (SDL_strcmp(argv[i], "--help") == 0) {
             SDL_Log("usage: gavaga [--play] [--stage N] [--seed N] [--mute]\n"
                     "              [--debug] [--path N] [--autoplay] [--godmode]\n"
+                    "              [--no-rumble]\n"
                     "              [--trace] [--shot FILE.bmp] [--shot-at TICK]");
             return SDL_APP_SUCCESS;
         }
@@ -591,7 +644,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         if (app->trace && app->win) {
             int x = 0, y = 0;
             SDL_GetWindowPosition(app->win, &x, &y);
-            SDL_Log("gavaga: window at %d,%d on exit, wm offset %+d,%+d -> saving %d,%d",
+            SDL_Log("gavaga: window at %d,%d on exit, wm offset %+d,%+d "
+                    "(next launch asks for %d,%d)",
                     x, y, app->win_state.bias_x, app->win_state.bias_y,
                     x - app->win_state.bias_x, y - app->win_state.bias_y);
         }

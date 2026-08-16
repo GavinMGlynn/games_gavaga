@@ -9,14 +9,21 @@
 // - a constant offset. Persist the reported number, restore it verbatim, and
 // the window walks down the screen a little further every launch.
 //
-// So the offset is measured and taken back off before saving. Measuring it is
-// the fiddly part: right after SDL_CreateWindow the position has not settled
-// and reads back as something unrelated, so instead we wait for the window
-// manager to tell us where it put the window. The first SDL_EVENT_WINDOW_MOVED
-// to arrive in the first moment of the window's life is that placement; later
-// ones are the player dragging it. A window manager that honours the request
-// exactly sends no such event, the offset stays zero, and none of this does
-// anything.
+// So the file stores two things: where the window actually sat on screen, and
+// the offset observed that session. The next run asks for position-minus-offset
+// and lands back where it was. Keeping the on-screen position - rather than the
+// already-corrected one - is what lets it be checked against display bounds
+// directly; correcting first can push a window that sits just below a screen
+// edge to a coordinate above that edge, and the off-screen guard then throws
+// away a perfectly good position.
+//
+// Measuring the offset is the fiddly part: right after SDL_CreateWindow the
+// position has not settled and reads back as something unrelated, so instead we
+// wait for the window manager to tell us where it put the window. The first
+// SDL_EVENT_WINDOW_MOVED to arrive in the first moment of the window's life is
+// that placement; later ones are the player dragging it. A window manager that
+// honours the request exactly sends no such event, the offset stays zero, and
+// none of this does anything.
 #include "gv_window.h"
 #include "gv_common.h"   // for the C23 nullptr shim on compilers that lack it
 
@@ -27,6 +34,7 @@
 
 #define GV_WIN_MIN   64                       // too small to find again
 #define GV_WIN_MAX   16384
+#define GV_WIN_BIAS_MAX 512                   // a decoration inset, not a teleport
 #define GV_WIN_SETTLE_NS (SDL_NS_PER_SECOND * 2)
 
 static bool window_path(char *buf, size_t buflen) {
@@ -63,23 +71,30 @@ bool gv_window_parse(const char *text, gv_window_geom *out) {
     if (!text || !out) return false;
 
     char magic[32] = { 0 };
-    int x = 0, y = 0, w = 0, h = 0, maxed = 0;
-    if (SDL_sscanf(text, "%31s %d %d %d %d %d", magic, &x, &y, &w, &h, &maxed) != 6)
+    int x = 0, y = 0, w = 0, h = 0, maxed = 0, bx = 0, by = 0;
+    if (SDL_sscanf(text, "%31s %d %d %d %d %d %d %d",
+                   magic, &x, &y, &w, &h, &maxed, &bx, &by) != 8)
         return false;
     if (SDL_strcmp(magic, GV_WIN_MAGIC) != 0) return false;
     if (w < GV_WIN_MIN || h < GV_WIN_MIN || w > GV_WIN_MAX || h > GV_WIN_MAX)
         return false;
+    // A window manager offset is a decoration inset, not a teleport. Anything
+    // larger means a corrupt file, and applying it would fling the window.
+    if (bx < -GV_WIN_BIAS_MAX || bx > GV_WIN_BIAS_MAX ||
+        by < -GV_WIN_BIAS_MAX || by > GV_WIN_BIAS_MAX)
+        return false;
 
     out->x = x; out->y = y; out->w = w; out->h = h;
     out->maximized = maxed != 0;
+    out->bias_x = bx; out->bias_y = by;
     return true;
 }
 
 bool gv_window_format(char *buf, size_t buflen, const gv_window_geom *g) {
     if (!buf || !g) return false;
-    const int len = SDL_snprintf(buf, buflen, "%s %d %d %d %d %d\n",
+    const int len = SDL_snprintf(buf, buflen, "%s %d %d %d %d %d %d %d\n",
                                  GV_WIN_MAGIC, g->x, g->y, g->w, g->h,
-                                 g->maximized ? 1 : 0);
+                                 g->maximized ? 1 : 0, g->bias_x, g->bias_y);
     return len > 0 && (size_t)len < buflen;
 }
 
@@ -120,11 +135,18 @@ SDL_Window *gv_window_create(const char *title, int def_w, int def_h,
     if (flags & SDL_WINDOW_RESIZABLE)
         SDL_SetBooleanProperty(p, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
 
+    // Ask for the position that lands the window back where it was, using last
+    // session's offset as the estimate. If the estimate is wrong - a first run,
+    // or a different window manager - the window is out by the difference once,
+    // and the correct offset is learned and stored before the next launch.
+    const int ask_x = g.x - g.bias_x;
+    const int ask_y = g.y - g.bias_y;
+
     // Placing at creation time is the part window managers honour. Moving an
     // already-mapped window is asynchronous and, under WSLg, unreliable.
     if (have && !g.maximized) {
-        SDL_SetNumberProperty(p, SDL_PROP_WINDOW_CREATE_X_NUMBER, g.x);
-        SDL_SetNumberProperty(p, SDL_PROP_WINDOW_CREATE_Y_NUMBER, g.y);
+        SDL_SetNumberProperty(p, SDL_PROP_WINDOW_CREATE_X_NUMBER, ask_x);
+        SDL_SetNumberProperty(p, SDL_PROP_WINDOW_CREATE_Y_NUMBER, ask_y);
     }
     if (have && g.maximized)
         SDL_SetBooleanProperty(p, SDL_PROP_WINDOW_CREATE_MAXIMIZED_BOOLEAN, true);
@@ -135,8 +157,10 @@ SDL_Window *gv_window_create(const char *title, int def_w, int def_h,
 
     if (have && !g.maximized) {
         st->placed          = true;
-        st->ask_x           = g.x;
-        st->ask_y           = g.y;
+        st->ask_x           = ask_x;
+        st->ask_y           = ask_y;
+        st->bias_x          = g.bias_x;   // last session's, until this one settles
+        st->bias_y          = g.bias_y;
         st->settle_until_ns = SDL_GetTicksNS() + GV_WIN_SETTLE_NS;
     }
     return win;
@@ -151,8 +175,22 @@ void gv_window_moved(gv_window_state *st, SDL_Window *win) {
 
     int x = 0, y = 0;
     SDL_GetWindowPosition(win, &x, &y);
-    st->bias_x     = x - st->ask_x;
-    st->bias_y     = y - st->ask_y;
+    const int dx = x - st->ask_x, dy = y - st->ask_y;
+
+    // An offset this large is not a decoration inset - it is the window manager
+    // declining to place the window where it was asked and putting it somewhere
+    // of its own choosing, which WSLg does intermittently. Recording that as an
+    // offset would poison the next launch, so treat it as no offset at all: the
+    // position simply is not restorable on this setup, and the saved one stays
+    // honest about where the window ended up.
+    if (dx < -GV_WIN_BIAS_MAX || dx > GV_WIN_BIAS_MAX ||
+        dy < -GV_WIN_BIAS_MAX || dy > GV_WIN_BIAS_MAX) {
+        st->bias_x = 0;
+        st->bias_y = 0;
+    } else {
+        st->bias_x = dx;
+        st->bias_y = dy;
+    }
     st->bias_known = true;
 }
 
@@ -186,9 +224,11 @@ void gv_window_save(SDL_Window *win, const gv_window_state *st) {
         return;
     }
 
+    // The on-screen position goes in as-is; the offset rides alongside it so
+    // the next run can work back to what to ask for.
     const gv_window_geom g = {
-        .x = x - st->bias_x, .y = y - st->bias_y,
-        .w = w, .h = h, .maximized = maxed,
+        .x = x, .y = y, .w = w, .h = h, .maximized = maxed,
+        .bias_x = st->bias_x, .bias_y = st->bias_y,
     };
     char line[GV_WIN_LINE_MAX];
     if (gv_window_format(line, sizeof line, &g))

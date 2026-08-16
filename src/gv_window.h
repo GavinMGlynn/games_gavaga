@@ -6,9 +6,13 @@
 #include <stdbool.h>
 
 typedef struct {
-    int  x, y;             // position, in the coordinates SDL_CreateWindow takes
+    int  x, y;             // where the window actually sat on screen last time
     int  w, h;             // client size
     bool maximized;
+    // What the window manager added to the position we asked for. Stored so
+    // the next run can ask for x-bias and land back on x, and so the on-screen
+    // position above stays directly comparable with display bounds.
+    int  bias_x, bias_y;
 } gv_window_geom;
 
 // Tracks the difference between the position we ask a window manager for and
