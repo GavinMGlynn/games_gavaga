@@ -134,6 +134,7 @@ add_library(gavaga_core STATIC
     src/gv_audio.c
     src/gv_score.c
     src/gv_window.c
+    src/gv_replay.c
     src/gv_debug.c)
 
 target_include_directories(gavaga_core PUBLIC src)

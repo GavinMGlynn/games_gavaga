@@ -19,6 +19,7 @@
 #include "gv_audio.h"
 #include "gv_score.h"
 #include "gv_window.h"
+#include "gv_replay.h"
 
 // The high score is written at most this often while playing, plus once on
 // exit - otherwise leading the board would mean a file write per point.
@@ -76,6 +77,12 @@ typedef struct {
 
     bool     pad_rumbles;   // the pad reports rumble support
     bool     no_rumble;     // --no-rumble
+
+    // Replay. Edge actions are latched here rather than applied straight to
+    // the game, so the recorder sees exactly what the simulation sees.
+    const char *record_path, *replay_path;
+    bool        edge_start, edge_restart;
+    bool        replay_done;
 
     bool     save_due;
     uint64_t last_save_ns;
@@ -344,10 +351,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
             app->trace = true;
         else if (SDL_strcmp(argv[i], "--no-rumble") == 0)
             app->no_rumble = true;
+        else if (SDL_strcmp(argv[i], "--record") == 0 && i + 1 < argc)
+            app->record_path = argv[++i];
+        else if (SDL_strcmp(argv[i], "--replay") == 0 && i + 1 < argc)
+            app->replay_path = argv[++i];
         else if (SDL_strcmp(argv[i], "--help") == 0) {
             SDL_Log("usage: gavaga [--play] [--stage N] [--seed N] [--mute]\n"
                     "              [--debug] [--path N] [--autoplay] [--godmode]\n"
-                    "              [--no-rumble]\n"
+                    "              [--no-rumble] [--record F.gvr] [--replay F.gvr]\n"
                     "              [--trace] [--shot FILE.bmp] [--shot-at TICK]");
             return SDL_APP_SUCCESS;
         }
@@ -401,14 +412,46 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     // A fixed seed makes a run byte-for-byte repeatable, which is the whole
     // point of the integer-only simulation - handy for reproducing a bug or a
     // screenshot.
-    gv_game_init(app->game,
-                 app->seed_set ? app->seed : (uint32_t)SDL_GetPerformanceCounter(),
-                 gv_score_load());
+    // A replay carries everything that decides how the run unfolds, so it
+    // overrides the command line rather than being merged with it. Anything
+    // left out here is a divergence waiting to happen.
+    gv_replay_head rh = { 0 };
+    const bool replaying = app->replay_path && gv_replay_play_open(app->replay_path, &rh);
+    if (app->replay_path && !replaying) return SDL_APP_FAILURE;
+    if (replaying) {
+        app->godmode     = rh.godmode;
+        app->autoplay    = rh.autoplay;
+        app->start_stage = rh.start_stage;
+    }
+
+    const uint32_t seed = replaying ? rh.seed
+                        : app->seed_set ? app->seed
+                        : (uint32_t)SDL_GetPerformanceCounter();
+
+    // The high score is display only - it never reaches the simulation - so a
+    // replay does not have to carry it.
+    gv_game_init(app->game, seed, gv_score_load());
     app->game->debug      = app->start_debug || app->start_path != GV_PATH_NONE;
     app->game->debug_path = app->start_path;
     app->game->godmode    = app->godmode;
-    if (app->start_play || app->start_stage > 0 || app->autoplay)
+
+    const bool started = replaying ? rh.started
+                       : (app->start_play || app->start_stage > 0 || app->autoplay);
+    if (started)
         gv_game_start(app->game, app->start_stage > 0 ? app->start_stage : 1);
+
+    if (app->record_path && !replaying) {
+        const gv_replay_head h = {
+            .seed        = seed,
+            .start_stage = (uint16_t)(app->start_stage > 0 ? app->start_stage : 0),
+            .started     = started,
+            .godmode     = app->godmode,
+            .autoplay    = app->autoplay,
+        };
+        gv_replay_record_open(app->record_path, &h);
+    } else if (app->record_path) {
+        SDL_Log("gavaga: --record is ignored while replaying");
+    }
 
     app->last_ns     = SDL_GetTicksNS();
     app->fps_mark_ns = app->last_ns;
@@ -467,7 +510,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         switch (event->gbutton.button) {
-        case SDL_GAMEPAD_BUTTON_START: gv_game_action(g, GV_ACT_START, true); break;
+        case SDL_GAMEPAD_BUTTON_START: app->edge_start = true; break;
         case SDL_GAMEPAD_BUTTON_BACK:  gv_game_action(g, GV_ACT_PAUSE, true); break;
         default: break;
         }
@@ -506,11 +549,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                 SDL_SetWindowFullscreen(app->win,
                     (SDL_GetWindowFlags(app->win) & SDL_WINDOW_FULLSCREEN) == 0);
             else
-                gv_game_action(g, GV_ACT_START, true);
+                app->edge_start = true;
             break;
         case SDL_SCANCODE_P:  gv_game_action(g, GV_ACT_PAUSE,   true); break;
         case SDL_SCANCODE_F2: gv_game_action(g, GV_ACT_STEP,    true); break;
-        case SDL_SCANCODE_R:  gv_game_action(g, GV_ACT_RESTART, true); break;
+        case SDL_SCANCODE_R:  app->edge_restart = true; break;
         case SDL_SCANCODE_F1: gv_game_action(g, GV_ACT_DEBUG,   true); break;
         case SDL_SCANCODE_F3: gv_game_action(g, GV_ACT_PATH,    true); break;
         default: break;
@@ -525,15 +568,45 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 // --- frame ----------------------------------------------------------------
+// Everything the simulation is told this tick, as one byte. Going through a
+// single value is what makes a recording faithful: play back the bytes and the
+// game cannot tell the difference between them and a pair of hands.
+static uint8_t compose_input(gv_app *app) {
+    uint8_t bits = 0;
+    if (app->kb.left  || app->pad.left)  bits |= GV_RP_LEFT;
+    if (app->kb.right || app->pad.right) bits |= GV_RP_RIGHT;
+    if (app->kb.fire  || app->pad.fire)  bits |= GV_RP_FIRE;
+    if (app->edge_start)   bits |= GV_RP_START;
+    if (app->edge_restart) bits |= GV_RP_RESTART;
+    return bits;
+}
+
+static void apply_input(gv_game *g, uint8_t bits) {
+    gv_game_action(g, GV_ACT_LEFT,  (bits & GV_RP_LEFT)  != 0);
+    gv_game_action(g, GV_ACT_RIGHT, (bits & GV_RP_RIGHT) != 0);
+    gv_game_action(g, GV_ACT_FIRE,  (bits & GV_RP_FIRE)  != 0);
+    if (bits & GV_RP_START)   gv_game_action(g, GV_ACT_START,   true);
+    if (bits & GV_RP_RESTART) gv_game_action(g, GV_ACT_RESTART, true);
+}
+
 static void step_once(gv_app *app) {
     gv_game *g = app->game;
 
-    // Compose the input sources, then let the demo brain override if it is
-    // driving this run.
-    gv_game_action(g, GV_ACT_LEFT,  app->kb.left  || app->pad.left);
-    gv_game_action(g, GV_ACT_RIGHT, app->kb.right || app->pad.right);
-    gv_game_action(g, GV_ACT_FIRE,  app->kb.fire  || app->pad.fire);
-    if (app->autoplay) gv_game_demo(g);
+    uint8_t bits = 0;
+    if (gv_replay_playing()) {
+        if (!gv_replay_play_tick(&bits)) {
+            SDL_Log("gavaga: replay finished at tick %u", g->tick);
+            app->replay_done = true;
+            return;
+        }
+    } else {
+        bits = compose_input(app);
+        if (gv_replay_recording()) gv_replay_record_tick(bits);
+    }
+    app->edge_start = app->edge_restart = false;
+
+    apply_input(g, bits);
+    if (app->autoplay) gv_game_demo(g);   // the demo brain overrides if driving
 
     gv_game_tick(g);
     drain_events(app);
@@ -547,7 +620,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     // Capture mode: fast-forward the simulation, draw once, write, exit.
     if (app->shot_path) {
-        while (g->tick < app->shot_at) step_once(app);
+        // step_once stops ticking once a replay is exhausted, so this has to
+        // watch for that or it spins forever on a replay shorter than --shot-at.
+        while (g->tick < app->shot_at && !app->replay_done) step_once(app);
         SDL_Renderer *target = app->ren;
         if (g->debug) {
             debug_window_open(app);
@@ -587,8 +662,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         // While paused the accumulated time is still consumed, just not
         // simulated. Letting it pile up instead would burst-run every missed
         // tick the moment you unpause.
+        if (app->replay_done) break;
     }
     g->ticks_last_frame = ticks;
+
+    // A replay that has run out has nothing left to show; carrying on would
+    // just be the attract screen wearing the replay's name.
+    if (app->replay_done) return SDL_APP_SUCCESS;
 
     if (app->save_due && now - app->last_save_ns >= SAVE_INTERVAL_NS) {
         gv_score_save(g->high);
@@ -652,6 +732,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         gv_window_save(app->win, &app->win_state);
     }
 
+    gv_replay_close();
     pad_close(app);
     debug_window_close(app);
     gv_audio_quit();

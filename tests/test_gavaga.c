@@ -9,6 +9,7 @@
 #include "gv_star.h"
 #include "gv_game.h"
 #include "gv_window.h"
+#include "gv_replay.h"
 
 #include <stdio.h>
 
@@ -445,6 +446,70 @@ static void test_window_geometry(void) {
     CHECK(!back.maximized, "maximized flag should be clear");
 }
 
+// --- replays --------------------------------------------------------------
+// The whole recording is a seed and one byte per tick, so what has to hold is
+// that the header survives the round trip and the stream comes back in order.
+static void test_replay(void) {
+    SECTION("replay round trip");
+
+    const char *path = "gavaga_replay_test.gvr";
+    const gv_replay_head in = {
+        .seed = 0xDEADBEEFu, .start_stage = 5,
+        .started = true, .godmode = true, .autoplay = false,
+    };
+
+    CHECK(gv_replay_record_open(path, &in), "could not open a replay for writing");
+    uint8_t sent[400];
+    for (int i = 0; i < 400; i++) {
+        // A spread of bit patterns rather than a counter, so a byte that got
+        // shifted or masked would show up.
+        sent[i] = (uint8_t)(((unsigned)i * 37u) & 0x1Fu);
+        gv_replay_record_tick(sent[i]);
+    }
+    gv_replay_close();
+    CHECK(!gv_replay_recording(), "still recording after close");
+
+    gv_replay_head out = { 0 };
+    CHECK(gv_replay_play_open(path, &out), "could not open the replay we just wrote");
+    CHECK(out.seed == in.seed, "seed %u != %u", out.seed, in.seed);
+    CHECK(out.start_stage == in.start_stage, "stage %u != %u", out.start_stage, in.start_stage);
+    CHECK(out.started == in.started, "started flag lost");
+    CHECK(out.godmode == in.godmode, "godmode flag lost");
+    CHECK(out.autoplay == in.autoplay, "autoplay flag lost");
+    CHECK(gv_replay_ticks() == 400, "%u ticks, wrote 400", gv_replay_ticks());
+
+    int mismatched = 0;
+    for (int i = 0; i < 400; i++) {
+        uint8_t got = 0xFF;
+        if (!gv_replay_play_tick(&got)) { mismatched = -1; break; }
+        if (got != sent[i]) mismatched++;
+    }
+    CHECK(mismatched == 0, "%d input bytes came back wrong", mismatched);
+
+    // Reading past the end must stop rather than run off the file.
+    uint8_t extra = 0;
+    CHECK(!gv_replay_play_tick(&extra), "read past the end of the replay");
+    gv_replay_close();
+
+    // Junk must be refused, not half-read.
+    SDL_IOStream *io = SDL_IOFromFile(path, "wb");
+    if (io) {
+        const char junk[] = "this is definitely not a replay file at all, no";
+        SDL_WriteIO(io, junk, sizeof junk - 1);
+        SDL_CloseIO(io);
+    }
+    gv_replay_head bad = { 0 };
+    CHECK(!gv_replay_play_open(path, &bad), "accepted a file that is not a replay");
+
+    // And a header cut in half.
+    io = SDL_IOFromFile(path, "wb");
+    if (io) { SDL_WriteIO(io, "GVRP", 4); SDL_CloseIO(io); }
+    CHECK(!gv_replay_play_open(path, &bad), "accepted a truncated header");
+    gv_replay_close();
+
+    SDL_RemovePath(path);
+}
+
 int main(void) {
     printf("gavaga tests\n");
     test_fixed();
@@ -456,6 +521,7 @@ int main(void) {
     test_soak_invariants();
     test_enemy_shots_aim_down();
     test_window_geometry();
+    test_replay();
 
     printf("\n%d checks, %d failed\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
