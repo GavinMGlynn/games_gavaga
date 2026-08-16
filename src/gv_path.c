@@ -4,7 +4,7 @@
 extern const gv_pathdef gv_path_table[GV_PATH_COUNT];
 
 const gv_pathdef *gv_path_def(uint16_t id) {
-    if (id == GV_PATH_NONE || id >= GV_PATH_COUNT) return nullptr;
+    if (id == GV_PATH_NONE || id >= GV_PATH_COUNT) return NULL;
     return &gv_path_table[id];
 }
 

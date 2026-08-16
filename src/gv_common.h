@@ -2,7 +2,12 @@
 #ifndef GV_COMMON_H
 #define GV_COMMON_H
 
+// Built as C23, but deliberately staying inside the subset every target
+// compiler actually implements. In particular the code uses NULL rather than
+// C23's `nullptr`: MSVC 19.51 still rejects that keyword in C mode, and
+// Windows x64 is a supported target.
 #include <SDL3/SDL.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 

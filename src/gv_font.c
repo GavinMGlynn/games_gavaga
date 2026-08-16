@@ -106,7 +106,7 @@ bool gv_font_init(SDL_Renderer *ren) {
         SDL_Log("gavaga: could not create font texture: %s", SDL_GetError());
         return false;
     }
-    if (!SDL_UpdateTexture(s_tex, nullptr, s_pixels, FONT_W * 4)) {
+    if (!SDL_UpdateTexture(s_tex, NULL, s_pixels, FONT_W * 4)) {
         SDL_Log("gavaga: could not upload font texture: %s", SDL_GetError());
         return false;
     }
@@ -116,7 +116,7 @@ bool gv_font_init(SDL_Renderer *ren) {
 }
 
 void gv_font_quit(void) {
-    if (s_tex) { SDL_DestroyTexture(s_tex); s_tex = nullptr; }
+    if (s_tex) { SDL_DestroyTexture(s_tex); s_tex = NULL; }
 }
 
 int gv_font_width(const char *text) {

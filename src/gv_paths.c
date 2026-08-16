@@ -123,7 +123,7 @@ static const gv_pathstep P_FLYBY_CROSS[] = {
 #define GV_PATH_ENTRY(sym, label) { sym, (uint16_t)GV_COUNTOF(sym), label }
 
 const gv_pathdef gv_path_table[GV_PATH_COUNT] = {
-    [GV_PATH_NONE]         = { nullptr, 0, "none" },
+    [GV_PATH_NONE]         = { NULL, 0, "none" },
     [GV_PATH_ENTRY_LOOP]   = GV_PATH_ENTRY(P_ENTRY_LOOP,   "entry.loop"),
     [GV_PATH_ENTRY_ARC]    = GV_PATH_ENTRY(P_ENTRY_ARC,    "entry.arc"),
     [GV_PATH_ENTRY_S]      = GV_PATH_ENTRY(P_ENTRY_S,      "entry.s"),

@@ -146,6 +146,11 @@ yours is too old.
 | AppleClang | 16 | Xcode 16 |
 | MSVC | 19.39 | VS 2022 17.9 |
 
+The code stays inside the C23 subset all four implement. Notably it uses `NULL`
+rather than C23's `nullptr`, because MSVC still rejects that keyword in C mode
+(checked against 19.51) — CI caught it, so it is worth knowing before you reach
+for a shiny new keyword here.
+
 **Debian / Ubuntu**
 
 ```sh
