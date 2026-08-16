@@ -424,7 +424,8 @@ static const gv_art ART[GV_SPR_COUNT] = {
 static SDL_Texture *s_atlas;
 static int          s_oversample = 1;
 static bool         s_baked_art;          // the Kenney atlas, rather than the ASCII
-static SDL_FRect    s_rects[GV_SPR_COUNT];
+static SDL_FRect    s_rects[GV_SPR_COUNT];       // whichever atlas is live
+static SDL_FRect    s_art_rects[GV_SPR_COUNT];   // always the hand-drawn one
 static uint8_t      s_pixels[ATLAS_W * ATLAS_H * 4];   // RGBA, static: no malloc
 
 static int pal_index(char c) {
@@ -490,7 +491,7 @@ static bool bake_atlas(void) {
                     i, w, h, GV_ATLAS_CELL);
             return false;
         }
-        s_rects[i] = (SDL_FRect){ (float)cx, (float)cy, (float)w, (float)h };
+        s_art_rects[i] = (SDL_FRect){ (float)cx, (float)cy, (float)w, (float)h };
     }
     s_baked = true;
     return true;
@@ -501,15 +502,47 @@ static bool bake_atlas(void) {
 // instead of turning into a 16px smudge, and centred in a square cell because
 // that is the shape every desktop expects.
 SDL_Surface *gv_sprite_icon(int scale) {
-    if (!bake_atlas()) return nullptr;
     if (scale < 1) scale = 1;
+
+    // Prefer the baked art, so the icon is the ship the player actually flies.
+    // This decodes the atlas a second time rather than holding the surface
+    // open for the life of the program: it happens twice, at startup.
+    SDL_IOStream *io = SDL_IOFromConstMem(GV_ATLAS_BMP, sizeof GV_ATLAS_BMP);
+    SDL_Surface *sheet = io ? SDL_LoadBMP_IO(io, true) : nullptr;
+    if (sheet) {
+        SDL_Surface *rgba = SDL_ConvertSurface(sheet, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(sheet);
+        if (rgba) {
+            const int cell = GV_ATLAS_BMP_CELL;
+            const int side = cell * scale;
+            SDL_Surface *icon = SDL_CreateSurface(side, side, SDL_PIXELFORMAT_RGBA32);
+            if (icon) {
+                const int cx = (GV_SPR_PLAYER % GV_ATLAS_COLS) * cell;
+                const int cy = (GV_SPR_PLAYER / GV_ATLAS_COLS) * cell;
+                const SDL_Rect src = { cx, cy, cell, cell };
+                const SDL_Rect dst = { 0, 0, side, side };
+                SDL_ClearSurface(icon, 0, 0, 0, 0);
+                if (SDL_BlitSurfaceScaled(rgba, &src, icon, &dst, SDL_SCALEMODE_NEAREST)) {
+                    SDL_DestroySurface(rgba);
+                    return icon;
+                }
+                SDL_DestroySurface(icon);
+            }
+            SDL_DestroySurface(rgba);
+        }
+    }
+
+    // Otherwise the hand-drawn ship, from its own rects - never s_rects, which
+    // describe whichever atlas is live and may be a different cell size.
+    if (!bake_atlas()) return nullptr;
 
     const int side = GV_ATLAS_CELL * scale;
     SDL_Surface *icon = SDL_CreateSurface(side, side, SDL_PIXELFORMAT_RGBA32);
     if (!icon) return nullptr;
 
-    const SDL_FRect *r = &s_rects[GV_SPR_PLAYER];
-    const int sw = (int)r->w, sh = (int)r->h;
+    const SDL_FRect *r = &s_art_rects[GV_SPR_PLAYER];
+    const int sw = SDL_min((int)r->w, GV_ATLAS_CELL);
+    const int sh = SDL_min((int)r->h, GV_ATLAS_CELL);
     const int ox = (GV_ATLAS_CELL - sw) / 2, oy = (GV_ATLAS_CELL - sh) / 2;
 
     SDL_ClearSurface(icon, 0, 0, 0, 0);
@@ -562,7 +595,7 @@ static bool load_baked_atlas(SDL_Renderer *ren) {
     for (int i = 0; i < GV_SPR_COUNT; i++) {
         const int cx = (i % GV_ATLAS_COLS) * cell;
         const int cy = (i / GV_ATLAS_COLS) * cell;
-        if (cy + cell > GV_ATLAS_BMP_HEIGHT) {   // atlas is short: fall back wholesale
+        if (cy + cell > GV_ATLAS_BMP_HEIGHT) {   // atlas short: fall back wholesale
             SDL_DestroyTexture(s_atlas);
             s_atlas = nullptr;
             SDL_Log("gavaga: embedded atlas has no cell for sprite %d", i);
@@ -592,6 +625,7 @@ bool gv_sprite_init(SDL_Renderer *ren) {
     s_baked_art  = false;
 
     if (!bake_atlas()) return false;
+    SDL_memcpy(s_rects, s_art_rects, sizeof s_rects);
 
     s_atlas = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
                                 SDL_TEXTUREACCESS_STATIC, ATLAS_W, ATLAS_H);
