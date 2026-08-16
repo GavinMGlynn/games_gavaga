@@ -8,7 +8,6 @@
 #include "gv_sprite.h"
 #include "gv_font.h"
 #include "gv_audio.h"
-#include "gv_debug.h"
 
 static const SDL_Color C_WHITE = { 255, 255, 255, 255 };
 static const SDL_Color C_RED   = { 232,  56,  40, 255 };
@@ -80,22 +79,35 @@ static void draw_beams(const gv_game *g, SDL_Renderer *ren) {
 static void draw_hud(const gv_game *g, SDL_Renderer *ren) {
     // Blink "1UP" like the original marquee.
     if ((g->tick / 20) & 1u) gv_font_draw(ren, 8, 2, C_RED, "1UP");
-    gv_font_printf(ren, 8, 11, C_WHITE, "%6u", g->score);
+    gv_font_printf(ren, 8, 11, C_WHITE, "%06u", g->score);
 
     gv_font_center(ren, 2, C_RED, "HIGH SCORE");
     char buf[16];
-    SDL_snprintf(buf, sizeof buf, "%6u", g->high);
+    SDL_snprintf(buf, sizeof buf, "%06u", g->high);
     gv_font_center(ren, 11, C_WHITE, buf);
 
-    // Lives, bottom left.
-    const int lives = gv_clampi(g->player.lives - 1, 0, 5);
-    for (int i = 0; i < lives; i++)
+    // Spare ships, bottom left. Past five it becomes a count rather than a row
+    // of icons running into the stage badges.
+    const int spare = gv_clampi(g->player.lives - 1, 0, 99);
+    const int icons = spare > 5 ? 1 : spare;
+    for (int i = 0; i < icons; i++)
         gv_draw_sprite_px(ren, GV_SPR_LIFE, 4 + i * 10, GV_SCREEN_H - 10);
+    if (spare > 5) gv_font_printf(ren, 15, GV_SCREEN_H - 9, C_WHITE, "X%d", spare);
 
-    // Stage badges, bottom right.
-    const int badges = gv_clampi(g->stage, 0, 8);
-    for (int i = 0; i < badges; i++)
-        gv_draw_sprite_px(ren, GV_SPR_BADGE, GV_SCREEN_W - 12 - i * 10, GV_SCREEN_H - 10);
+    // Stage badges, bottom right: tens, then fives, then ones, so stage 37 is
+    // three gold, one grey and two green rather than 37 icons.
+    static const struct { int worth; int spr; } TIERS[] = {
+        { 10, GV_SPR_BADGE10 }, { 5, GV_SPR_BADGE5 }, { 1, GV_SPR_BADGE }
+    };
+    int x = GV_SCREEN_W - 12, left = gv_clampi(g->stage, 0, 99), drawn = 0;
+    for (int t = 0; t < 3 && drawn < 8; t++) {
+        while (left >= TIERS[t].worth && drawn < 8) {
+            gv_draw_sprite_px(ren, TIERS[t].spr, x, GV_SCREEN_H - 10);
+            x -= 10;
+            left -= TIERS[t].worth;
+            drawn++;
+        }
+    }
 
     if (gv_audio_muted()) gv_font_draw(ren, GV_SCREEN_W - 29, 11, C_DIM, "MUTE");
 }
@@ -208,6 +220,4 @@ void gv_render_frame(const gv_game *g, SDL_Renderer *ren) {
 
     draw_hud(g, ren);
     draw_mode_text(g, ren);
-
-    if (g->debug) gv_debug_draw(g, ren);
 }

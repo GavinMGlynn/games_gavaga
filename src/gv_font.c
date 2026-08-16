@@ -80,10 +80,28 @@ static const char *const GLYPHS[GV_FONT_COUNT * GV_GLYPH_H] = {
 #define FONT_W (GV_FONT_COUNT * GV_FONT_CELL)
 #define FONT_H GV_FONT_CELL
 
-static SDL_Texture *s_tex;
-static uint8_t      s_pixels[FONT_W * FONT_H * 4];
+// Textures belong to a renderer, and the debug view lives in a second window
+// with its own. The glyph bitmap is rasterised once and uploaded per renderer;
+// every draw call already takes the renderer, so lookup costs nothing.
+#define GV_FONT_SLOTS 4
 
-bool gv_font_init(SDL_Renderer *ren) {
+typedef struct {
+    SDL_Renderer *ren;
+    SDL_Texture  *tex;
+} gv_font_slot;
+
+static gv_font_slot s_slots[GV_FONT_SLOTS];
+static uint8_t      s_pixels[FONT_W * FONT_H * 4];
+static bool         s_rasterised;
+
+static SDL_Texture *font_tex(SDL_Renderer *ren) {
+    for (int i = 0; i < GV_FONT_SLOTS; i++)
+        if (s_slots[i].ren == ren) return s_slots[i].tex;
+    return nullptr;
+}
+
+static void rasterise(void) {
+    if (s_rasterised) return;
     SDL_memset(s_pixels, 0, sizeof s_pixels);
 
     for (int g = 0; g < GV_FONT_COUNT; g++) {
@@ -99,24 +117,57 @@ bool gv_font_init(SDL_Renderer *ren) {
             }
         }
     }
+    s_rasterised = true;
+}
 
-    s_tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
-                              SDL_TEXTUREACCESS_STATIC, FONT_W, FONT_H);
-    if (!s_tex) {
+bool gv_font_init(SDL_Renderer *ren) {
+    if (font_tex(ren)) return true;   // already have one for this renderer
+
+    int slot = -1;
+    for (int i = 0; i < GV_FONT_SLOTS; i++)
+        if (!s_slots[i].ren) { slot = i; break; }
+    if (slot < 0) {
+        SDL_Log("gavaga: out of font slots");
+        return false;
+    }
+
+    rasterise();
+
+    SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
+                                         SDL_TEXTUREACCESS_STATIC, FONT_W, FONT_H);
+    if (!tex) {
         SDL_Log("gavaga: could not create font texture: %s", SDL_GetError());
         return false;
     }
-    if (!SDL_UpdateTexture(s_tex, nullptr, s_pixels, FONT_W * 4)) {
+    if (!SDL_UpdateTexture(tex, nullptr, s_pixels, FONT_W * 4)) {
         SDL_Log("gavaga: could not upload font texture: %s", SDL_GetError());
+        SDL_DestroyTexture(tex);
         return false;
     }
-    SDL_SetTextureScaleMode(s_tex, SDL_SCALEMODE_NEAREST);
-    SDL_SetTextureBlendMode(s_tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+
+    s_slots[slot].ren = ren;
+    s_slots[slot].tex = tex;
     return true;
 }
 
+void gv_font_quit_renderer(SDL_Renderer *ren) {
+    for (int i = 0; i < GV_FONT_SLOTS; i++) {
+        if (s_slots[i].ren != ren) continue;
+        SDL_DestroyTexture(s_slots[i].tex);
+        s_slots[i].ren = nullptr;
+        s_slots[i].tex = nullptr;
+    }
+}
+
 void gv_font_quit(void) {
-    if (s_tex) { SDL_DestroyTexture(s_tex); s_tex = nullptr; }
+    for (int i = 0; i < GV_FONT_SLOTS; i++) {
+        if (!s_slots[i].ren) continue;
+        SDL_DestroyTexture(s_slots[i].tex);
+        s_slots[i].ren = nullptr;
+        s_slots[i].tex = nullptr;
+    }
 }
 
 int gv_font_width(const char *text) {
@@ -126,6 +177,7 @@ int gv_font_width(const char *text) {
 }
 
 void gv_font_draw(SDL_Renderer *ren, int x, int y, SDL_Color c, const char *text) {
+    SDL_Texture *s_tex = font_tex(ren);
     if (!s_tex || !text) return;
 
     SDL_SetTextureColorMod(s_tex, c.r, c.g, c.b);

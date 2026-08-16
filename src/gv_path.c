@@ -52,9 +52,13 @@ bool gv_path_step(gv_path_runner *r, ang_t *heading) {
     const gv_pathstep *s = &d->steps[r->step];
     *heading = (ang_t)(*heading + (int32_t)s->turn * r->mirror);
 
+    // This tick has been flown, so report success for it and only tell the
+    // caller the table is spent on the *next* call. Returning false here as
+    // well would conflate "I just flew a tick" with "there is nothing left",
+    // and left gv_path_trace one tick short of what an entity really flies.
     if (--r->timer == 0) {
         do {
-            if (++r->step >= d->nsteps) { r->finished = true; return false; }
+            if (++r->step >= d->nsteps) { r->finished = true; break; }
             r->timer = d->steps[r->step].ticks;
         } while (r->timer == 0);
     }

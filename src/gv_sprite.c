@@ -324,6 +324,10 @@ static const gv_art ART[GV_SPR_COUNT] = {
     [GV_SPR_BOOM3]           = { ART_BOOM3,       nullptr },
     [GV_SPR_LIFE]            = { ART_LIFE,        nullptr },
     [GV_SPR_BADGE]           = { ART_BADGE,       nullptr },
+    // Stage badges are tiered so a high stage count still fits the corner:
+    // grey for five, gold for ten.
+    [GV_SPR_BADGE5]          = { ART_BADGE,       "8d3e" },
+    [GV_SPR_BADGE10]         = { ART_BADGE,       "8637" },
 };
 
 // --- baking ---------------------------------------------------------------

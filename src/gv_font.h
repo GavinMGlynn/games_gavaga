@@ -9,7 +9,9 @@
 #define GV_GLYPH_ADV 6    // pixels between glyph origins
 #define GV_LINE_ADV  8    // pixels between baselines
 
+// Safe to call for more than one renderer - the debug view has its own window.
 bool gv_font_init(SDL_Renderer *ren);
+void gv_font_quit_renderer(SDL_Renderer *ren);
 void gv_font_quit(void);
 
 void gv_font_draw(SDL_Renderer *ren, int x, int y, SDL_Color c, const char *text);

@@ -24,7 +24,7 @@
 #define GV_FORM_ROWS  5
 #define GV_FORM_TOP   42    // y of row 0
 #define GV_FORM_VGAP  18
-#define GV_FORM_HGAP  17
+#define GV_FORM_HGAP  18    // sprites are 16px, so this leaves a 2px gutter
 
 // --- tractor beam ---------------------------------------------------------
 // The cone has to reach past the player's row to be able to catch anything.
@@ -203,6 +203,13 @@ typedef struct {
     uint16_t     dive_timer;
     int          divers;
 
+    // Consecutive kills of attacking ships, for the dive multiplier. Reset by
+    // a miss or a death, so it rewards not spraying.
+    int          combo;
+    int          best_combo;
+    uint16_t     deaths_this_stage;
+    bool         demo;          // attract-mode demo play; deaths are free
+
     // Tractor beam. Two separate roles, because they do not end together:
     // `beamer` is whoever is projecting a cone right now and is cleared when
     // the cone closes, while `captor` is whoever actually caught the ship and
@@ -238,9 +245,23 @@ typedef struct {
 } gv_game;
 
 // --- API ------------------------------------------------------------------
+// Input is expressed as actions rather than keys, so the keyboard and a
+// gamepad can drive the same game without fighting over the held state: the
+// caller composes both sources and sets the movement actions every frame.
+enum {
+    GV_ACT_LEFT = 0, GV_ACT_RIGHT, GV_ACT_FIRE,
+    GV_ACT_START, GV_ACT_PAUSE, GV_ACT_STEP, GV_ACT_RESTART,
+    GV_ACT_DEBUG, GV_ACT_PATH,
+    GV_ACT_COUNT
+};
+
 void gv_game_init(gv_game *g, uint32_t seed, uint32_t high);
 void gv_game_tick(gv_game *g);
-void gv_game_key(gv_game *g, SDL_Scancode sc, bool down);
+void gv_game_action(gv_game *g, int action, bool down);
+
+// The demo brain. Drives attract mode from inside the simulation so it stays
+// deterministic, and is reused by --autoplay for soak runs.
+void gv_game_demo(gv_game *g);
 
 // Begin a fresh game at the given stage. Stage 1 in normal play; the higher
 // stages are reachable from the command line for testing late-game content.

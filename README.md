@@ -25,16 +25,23 @@ compiler, CMake 3.28+, and the usual X11/Wayland dev headers on Linux.
 
 | Key | |
 |---|---|
-| ← → / A D | move |
-| Space / Z / Ctrl | fire (two shots on screen, like the original) |
-| Enter | start |
-| M | mute |
-| F1 | debug overlay |
-| F3 | cycle the path catalogue |
-| P / F2 | pause / single-step one tick |
-| R | restart |
-| F11 / Alt-Enter | fullscreen |
-| Esc | quit |
+| Keyboard | Gamepad | |
+|---|---|---|
+| ← → / A D | left stick or d-pad | move |
+| Space / Z / Ctrl | any face button, shoulder or trigger | fire |
+| Enter | Start | start |
+| P | Back | pause |
+| M | | mute |
+| F1 | | open the debug window |
+| F3 | | cycle the path catalogue |
+| F2 | | single-step one tick while paused |
+| R | | restart |
+| F11 / Alt-Enter | | fullscreen |
+| Esc | | quit |
+
+Gamepads hot-plug: connect one mid-game and it is picked up. The keyboard stays
+live either way — the two sources are OR-ed together, so neither can hold the
+other's input down.
 
 ## Rules worth knowing
 
@@ -52,10 +59,20 @@ it.
 so you can see which ones are one shot from dead.
 
 Every third stage is a **challenging stage** — nothing shoots back, nothing
-joins the formation, and clearing the lot is worth a bonus. Dive speed, fire
-rate and the number of simultaneous attackers all scale with the stage number.
-A spare ship arrives at 20,000 points and every 60,000 after that. The high
-score is kept between sessions.
+joins the formation, and clearing the lot is worth a bonus. The four normal
+layouts rotate between them.
+
+**Scoring rewards aim, not volume.** Ships killed while attacking chain: every
+fourth one steps a multiplier up to ×4, and a shot that sails off the top of
+the screen breaks the chain. Clearing a stage without losing a ship pays a
+bonus that grows with the stage. Dive speed, fire rate and the number of
+simultaneous attackers all scale with the stage number. A spare ship arrives at
+20,000 points and every 60,000 after that, and the high score is kept between
+sessions.
+
+The attract screen is not a mock-up: it is the real game being played by the
+same brain `--autoplay` uses, so the entry paths, dives and the tractor beam
+are all on show.
 
 ## The path interpreter
 
@@ -91,12 +108,15 @@ static const gv_pathstep P_ENTRY_LOOP[] = {
 
 Radius, if you need it, is `speed_px_per_tick * ticks / radians_turned`.
 
-**Tuning them:** press F1, then F3 to cycle the catalogue. It draws one path on
-its own from a representative origin, both mirrors at once (cyan `+1`, pink
-`-1`), with its step count and total duration. Edit the table, rebuild, look
-again. In-game, F1 alone draws each entity's trail plus its *predicted*
-remaining flight — the prediction runs the same integration the simulation
-does, so what you see is exactly where it will go.
+**Tuning them:** press F1. The debug view opens in its own window — the game
+window stays clean — showing each entity's trail, its *predicted* remaining
+flight, hitboxes, beam cones and the formation slots, with a counters panel
+underneath. The prediction runs the same integration the simulation does, so
+what you see is exactly where it will go.
+
+F3 cycles a catalogue that draws one path on its own from a representative
+origin, both mirrors at once (cyan `+1`, pink `-1`), with its step count and
+total duration. Edit the table, rebuild, look again.
 
 ## How it fits together
 
@@ -109,7 +129,7 @@ does, so what you see is exactly where it will go.
 | `gv_render.c` | all drawing |
 | `gv_audio.c` | the synth: no sound files, everything generated at runtime |
 | `gv_score.c` | the persistent high score |
-| `gv_debug.c` | the F1/F3 overlay |
+| `gv_debug.c` | the F1 debug window and F3 path catalogue |
 | `gv_math.c` | integer sin/cos/atan tables |
 | `main.c` | SDL3 callbacks and the fixed-timestep loop |
 
@@ -134,10 +154,11 @@ a xorshift32 RNG rather than libc's. Same seed, same inputs, same game on any
 platform — `--seed N` makes that usable, and two runs with the same seed
 produce byte-identical traces.
 
-**Effects leave as data.** The simulation never plays a sound or writes a file;
-it appends game events to a queue and sets a flag, and `main.c` turns those
-into audio and a high-score write. That is what keeps `gv_game.c` testable and
-deterministic.
+**Effects leave as data.** The simulation never plays a sound, writes a file or
+reads a device; it appends game events to a queue and sets a flag, and `main.c`
+turns those into audio and a high-score write. Input arrives the same way round
+— as abstract actions, so a keyboard and a gamepad are indistinguishable to the
+game. That is what keeps `gv_game.c` testable and deterministic.
 
 **SDL3 error convention.** Most SDL3 functions return `bool`, `true` on
 success — the inverse of SDL2, where `0` meant OK.
@@ -272,17 +293,32 @@ keeps it alive to reach later stages, and `--trace` prints state transitions
 with their tick so you can point `--shot-at` at the exact moment something
 happened. The full list is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Tests
+
+```sh
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+The simulation is a library (`gavaga_core`) that both the game and the tests
+link, so the tests exercise the code that actually ships. They cover the
+fixed-point maths, the trig tables and their inverse, every path table (arc
+totals, mirror symmetry to within a pixel, resuming a part-way runner), the
+LFSR starfield, formation geometry across the whole sway cycle, pool bounds
+over a 40,000-tick unattended run, and determinism: two games from the same
+seed must stay bit-identical for 6,000 ticks, and two different seeds must not.
+
+They run on Linux, Windows and macOS in CI — a determinism test is only worth
+something if it passes on more than one machine.
+
 ## Where to go next
 
-- **More stage layouts.** There are two, alternating, plus the challenging
-  stage. The wave tables are cheap to add to.
-- **Bonus scoring for a full formation kill**, and the mid-dive score
-  multipliers the original had.
-- **Gamepad support.** SDL3 has everything needed; nothing is wired up.
-- **Attract-mode demo play**, driving the real game rather than just showing
-  the entry paths.
 - **A proper mixer** — the synth is deliberately tiny, with no filters,
   reverb, or music bed.
+- **Rumble** on the gamepad; SDL3 has it, nothing uses it.
+- **More enemy kinds** beyond the three, and per-kind attack behaviour.
+- **Replays**, which the deterministic core makes almost free: record the
+  seed and the input bits, play them back.
 
 ## Contributing
 

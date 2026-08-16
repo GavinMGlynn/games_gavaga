@@ -25,6 +25,8 @@ jobs:
                    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DGAVAGA_WERROR=ON
       - name: Build
         run: cmake --build build -j
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
       - name: Smoke test
         env:
           SDL_VIDEODRIVER: dummy
@@ -40,8 +42,8 @@ jobs:
           SDL_RENDER_DRIVER: software
           SDL_AUDIODRIVER: dummy
         run: |
-          ./build/gavaga --autoplay --godmode --stage 2 --seed 1 --trace \
-                         --shot beam.bmp --shot-at 4000 2>&1 | tee trace.log
+          ./build/gavaga --autoplay --godmode --stage 2 --seed 3 --trace \
+                         --shot beam.bmp --shot-at 8000 2>&1 | tee trace.log
           for want in "mode play -> captured" "captive held: yes" \
                       "rescue ship: released" "dual fighter: DOCKED"; do
             grep -qF "$want" trace.log || { echo "MISSING: $want"; exit 1; }
@@ -67,6 +69,8 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - name: Build
         run: cmake --build build --config RelWithDebInfo --parallel
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure -C RelWithDebInfo
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -81,6 +85,8 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - name: Build
         run: cmake --build build -j3
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64

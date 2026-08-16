@@ -16,7 +16,13 @@ You need CMake 3.28+ and a C23 compiler (GCC 14+, Clang 19+, AppleClang 16+, or
 MSVC 19.39+). SDL3 is fetched and built for you. The README has the per-distro
 dependency lists.
 
-Before opening a PR, please run the sanitizer build and a soak:
+Run the tests:
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+Before opening a PR, please also run the sanitizer build and a soak:
 
 ```sh
 cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DGAVAGA_ASAN=ON -DGAVAGA_WERROR=ON
@@ -65,8 +71,13 @@ Match what is already there rather than importing a new style.
 - Comments explain *why*, not *what*. If a constant was arrived at by tuning,
   say so.
 - Keep the simulation pure: `gv_game.c` must not touch the renderer, the wall
-  clock, the filesystem or the heap. Effects leave the simulation as data — see
-  how the sound queue works — and something outside acts on them.
+  clock, the filesystem, an input device or the heap. Effects leave the
+  simulation as data — see how the sound queue works — and something outside
+  acts on them. Input arrives the same way, as abstract `GV_ACT_*` actions, so
+  the game cannot tell a keyboard from a gamepad.
+- Anything added to the simulation must stay deterministic. There is a test
+  that runs two games from one seed for 6,000 ticks and compares them; if your
+  change makes it fail, the change is the problem.
 - No allocation after init. Every pool is a fixed-capacity struct-of-arrays.
   If you need a new entity type, add a pool; do not reach for `malloc`.
 - Gameplay maths is integer: 16.16 fixed point and the BAM angle helpers in
@@ -94,8 +105,8 @@ Tables carry no position — the spawn point comes from the wave table in
 `gv_game.c`, and `mirror = -1` flips every turn to give you the other side of
 the screen for free.
 
-To see what you have drawn, run the game, press <kbd>F1</kbd> for the overlay
-and <kbd>F3</kbd> to cycle the path catalogue. It shows one table at a time
+To see what you have drawn, run the game, press <kbd>F1</kbd> for the debug window
+then <kbd>F3</kbd> to cycle the path catalogue. It shows one table at a time
 from a representative origin in both mirrors, with its step count and duration.
 In game, <kbd>F1</kbd> also draws each entity's trail and its predicted
 remaining flight. Radius, if you need to reason about it, is

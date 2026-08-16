@@ -11,6 +11,7 @@ project(gavaga
 option(GAVAGA_USE_SYSTEM_SDL "Use find_package(SDL3) instead of FetchContent" OFF)
 option(GAVAGA_SDL_SHARED     "Build the fetched SDL3 as a shared library"     OFF)
 option(GAVAGA_WERROR         "Treat compiler warnings as errors"              OFF)
+option(GAVAGA_TESTS          "Build the unit tests"                           ON)
 option(GAVAGA_ASAN           "Build with address+UB sanitizers"               OFF)
 
 set(GAVAGA_SDL_TAG "release-3.2.30" CACHE STRING
@@ -118,10 +119,10 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# The game
+# Everything except main.c goes in a library, so the tests can link the same
+# code the game runs.
 # ---------------------------------------------------------------------------
-add_executable(gavaga
-    src/main.c
+add_library(gavaga_core STATIC
     src/gv_math.c
     src/gv_path.c
     src/gv_paths.c
@@ -134,33 +135,57 @@ add_executable(gavaga
     src/gv_score.c
     src/gv_debug.c)
 
-target_include_directories(gavaga PRIVATE src)
-target_link_libraries(gavaga PRIVATE ${GAVAGA_SDL_TARGET})
+target_include_directories(gavaga_core PUBLIC src)
+target_link_libraries(gavaga_core PUBLIC ${GAVAGA_SDL_TARGET})
 
-if(NOT GAVAGA_HAVE_NULLPTR)
-    target_compile_definitions(gavaga PRIVATE GV_NO_NULLPTR)
-endif()
+add_executable(gavaga src/main.c)
+target_link_libraries(gavaga PRIVATE gavaga_core)
 
-target_compile_options(gavaga PRIVATE ${GAVAGA_C_FLAGS})
-
-if(MSVC)
-    target_compile_options(gavaga PRIVATE /W4 /utf-8)
-    if(GAVAGA_WERROR)
-        target_compile_options(gavaga PRIVATE /WX)
+# Applies the project's warning set, C23 flags and sanitiser choice to a
+# target. Keeping it in one place stops the game and the tests drifting apart.
+function(gavaga_configure target)
+    if(NOT GAVAGA_HAVE_NULLPTR)
+        target_compile_definitions(${target} PRIVATE GV_NO_NULLPTR)
     endif()
-else()
-    target_compile_options(gavaga PRIVATE
-        -Wall -Wextra -Wshadow -Wconversion -Wsign-conversion
-        -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes
-        -Wno-unused-parameter)
-    if(GAVAGA_WERROR)
-        target_compile_options(gavaga PRIVATE -Werror)
-    endif()
-endif()
+    target_compile_options(${target} PRIVATE ${GAVAGA_C_FLAGS})
 
-if(GAVAGA_ASAN AND NOT MSVC)
-    target_compile_options(gavaga PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(gavaga    PRIVATE -fsanitize=address,undefined)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /utf-8)
+        if(GAVAGA_WERROR)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wshadow -Wconversion -Wsign-conversion
+            -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes
+            -Wno-unused-parameter)
+        if(GAVAGA_WERROR)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+
+    if(GAVAGA_ASAN AND NOT MSVC)
+        target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target}    PRIVATE -fsanitize=address,undefined)
+    endif()
+endfunction()
+
+gavaga_configure(gavaga_core)
+gavaga_configure(gavaga)
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+if(GAVAGA_TESTS)
+    enable_testing()
+    add_executable(gavaga_tests tests/test_gavaga.c)
+    target_link_libraries(gavaga_tests PRIVATE gavaga_core)
+    gavaga_configure(gavaga_tests)
+    add_test(NAME gavaga COMMAND gavaga_tests)
+    # No window, no audio device, no gamepads.
+    set_tests_properties(gavaga PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+        TIMEOUT 120)
 endif()
 
 # Windows: GUI subsystem so no console window pops up. SDL_MAIN_USE_CALLBACKS

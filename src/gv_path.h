@@ -78,8 +78,10 @@ int               gv_path_ticks(uint16_t id);   // total duration of a path
 void gv_path_start(gv_path_runner *r, uint16_t def, int8_t mirror);
 void gv_path_clear(gv_path_runner *r);
 
-// Advance one tick. Updates *heading. Returns false once the path is spent
-// (the caller decides what the entity does next).
+// Advance one tick, updating *heading. Returns true if a tick of the path was
+// actually flown, so a table of N ticks returns true exactly N times and false
+// from then on. Move the entity only when it returns true; a false means the
+// table is spent and the caller decides what happens next.
 bool gv_path_step(gv_path_runner *r, ang_t *heading);
 
 // Roll a path forward without owning an entity: used by the debug overlay to

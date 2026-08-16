@@ -21,7 +21,9 @@ enum {
     GV_SPR_ESHOT,
     GV_SPR_BOOM0, GV_SPR_BOOM1, GV_SPR_BOOM2, GV_SPR_BOOM3,
     GV_SPR_LIFE,
-    GV_SPR_BADGE,
+    GV_SPR_BADGE,      // one stage
+    GV_SPR_BADGE5,     // five stages
+    GV_SPR_BADGE10,    // ten stages
     GV_SPR_COUNT
 };
 

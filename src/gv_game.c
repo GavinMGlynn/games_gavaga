@@ -23,8 +23,8 @@
 
 #define FORM_SWAY_RATE   96
 #define FORM_BREATH_RATE 150
-#define FORM_SWAY_PX     10
-#define FORM_BREATH_AMP  gv_fix_from_f(0.10f)
+#define FORM_SWAY_PX     8
+#define FORM_BREATH_AMP  gv_fix_from_f(0.08f)
 
 // Tractor beam timings, in ticks.
 #define BEAM_OPEN_T      36
@@ -36,6 +36,7 @@
 #define RESCUE_SPEED     gv_fix_from_f(1.25f)
 #define RESCUE_DRIFT     gv_fix_from_f(0.70f)
 
+#define CLEAN_STAGE_BONUS 1000u                 // cleared without losing a ship
 #define EXTRA_FIRST      20000u
 #define EXTRA_EVERY      60000u
 #define MAX_LIVES        9
@@ -108,6 +109,24 @@ static const gv_group STAGE_B[] = {
     { 560,  4, 14, GV_PATH_ENTRY_LOOP,   -1,  244, 300, 346,  0, 0 },
 };
 
+// Spirals up the flanks, loops in from the bottom corners, bosses over the top.
+static const gv_group STAGE_C[] = {
+    {  30, 10, 10, GV_PATH_ENTRY_SPIRAL, +1,  -20, 200,  80, 20, 0 },
+    {  40, 10, 10, GV_PATH_ENTRY_SPIRAL, -1,  244, 200, 280, 30, 0 },
+    { 300,  8, 11, GV_PATH_ENTRY_LOOP,   +1,  -20, 300,  14,  4, 0 },
+    { 310,  8, 11, GV_PATH_ENTRY_LOOP,   -1,  244, 300, 346, 12, 0 },
+    { 560,  4, 14, GV_PATH_ENTRY_ARC,    +1,   40, -20, 170,  0, 0 },
+};
+
+// S-curves up the middle, then shallow crossing runs, bosses last.
+static const gv_group STAGE_D[] = {
+    {  30, 10, 10, GV_PATH_ENTRY_S,      +1,   88, 312,   0, 20, 0 },
+    {  40, 10, 10, GV_PATH_ENTRY_S,      -1,  136, 312,   0, 30, 0 },
+    { 300,  8, 11, GV_PATH_ENTRY_CROSS,  +1,  -20, 240,  55,  4, 0 },
+    { 310,  8, 11, GV_PATH_ENTRY_CROSS,  -1,  244, 240, 305, 12, 0 },
+    { 560,  4, 14, GV_PATH_ENTRY_SPIRAL, -1,  244, 150, 270,  0, 0 },
+};
+
 // Challenging stage: nobody joins the formation, nobody shoots. Clear the lot
 // for a bonus.
 static const gv_group STAGE_CHALLENGE[] = {
@@ -122,13 +141,22 @@ static const gv_group STAGE_CHALLENGE[] = {
 static const gv_stage STAGES[] = {
     GV_STAGE(STAGE_A, false),
     GV_STAGE(STAGE_B, false),
+    GV_STAGE(STAGE_C, false),
+    GV_STAGE(STAGE_D, false),
     GV_STAGE(STAGE_CHALLENGE, true),
 };
+#define GV_NORMAL_LAYOUTS 4
+#define GV_CHALLENGE_IDX  4
 
 static const gv_stage *stage_for(int stage) {
-    // Every third stage is a challenging stage; the rest alternate layouts.
-    if (stage % 3 == 0) return &STAGES[2];
-    return &STAGES[(stage % 2) ? 0 : 1];
+    // Every third stage is a challenging stage.
+    if (stage % 3 == 0) return &STAGES[GV_CHALLENGE_IDX];
+
+    // Rotate the normal layouts by their position among *normal* stages, so
+    // they do not alias with the every-third-stage challenge cadence and end
+    // up only ever showing two of the four.
+    const int normal = stage - stage / 3;    // 1-based
+    return &STAGES[(normal - 1) % GV_NORMAL_LAYOUTS];
 }
 
 // --- formation ------------------------------------------------------------
@@ -236,8 +264,28 @@ void gv_spawn_fx(gv_game *g, fix_t x, fix_t y, bool big) {
 }
 
 // --- scoring --------------------------------------------------------------
+// Kills of attacking ships chain: every fourth one steps the multiplier up,
+// and a shot that sails off the top of the screen breaks it. Rewards picking
+// targets over holding the trigger down.
+static uint32_t dive_multiplier(int combo) {
+    if (combo >= 12) return 4;
+    if (combo >= 8)  return 3;
+    if (combo >= 4)  return 2;
+    return 1;
+}
+
+static void combo_break(gv_game *g) {
+    if (g->combo > g->best_combo) g->best_combo = g->combo;
+    g->combo = 0;
+}
+
 static void add_score(gv_game *g, uint32_t pts) {
     g->score += pts;
+
+    // The attract demo plays for real but must not touch the record or earn
+    // spare ships.
+    if (g->demo) return;
+
     if (g->score > g->high) {
         g->high = g->score;
         g->want_save_high = true;
@@ -298,6 +346,8 @@ static void stage_begin(gv_game *g, int stage) {
     g->stage_spawned = false;
     g->chal_spawned  = 0;
     g->chal_killed   = 0;
+    g->deaths_this_stage = 0;
+    combo_break(g);
     g->divers        = 0;
     g->dive_timer    = 240;
     g->beamer        = -1;
@@ -427,7 +477,8 @@ static void beam_try_capture(gv_game *g, int i) {
 }
 
 static void maybe_capture(gv_game *g) {
-    if (g->challenge || g->mode != GV_MODE_PLAY) return;
+    if (g->challenge) return;
+    if (g->mode != GV_MODE_PLAY && g->mode != GV_MODE_ATTRACT) return;
     if (g->capture_cd > 0) { g->capture_cd--; return; }
     if (g->beamer >= 0 || g->captor >= 0 || g->any_captive) return;
     if (g->player.dual || !g->player.alive) return;
@@ -475,6 +526,83 @@ static void rescue_tick(gv_game *g) {
     }
 }
 
+// --- demo brain -----------------------------------------------------------
+// Drives attract mode, and --autoplay for soak runs. It walks *into* tractor
+// beams on purpose: getting captured, shooting the boss and docking the freed
+// fighter is the longest path in the game and the least likely to be reached
+// by leaving the game running unattended.
+void gv_game_demo(gv_game *g) {
+    if (g->mode == GV_MODE_GAMEOVER) { g->in.start = true; return; }
+
+    g->in.left = g->in.right = false;
+    g->in.fire = true;
+    if (!g->player.alive) return;
+
+    fix_t target  = g->player.x;
+    bool  have    = false;
+    bool  to_beam = false;
+
+    // 1. an open beam - stand in it
+    for (int i = 0; i < g->en.hi && !have; i++) {
+        fix_t top, bottom, half_bot;
+        if (!gv_beam_shape(g, i, &top, &bottom, &half_bot)) continue;
+        target = g->en.x[i];
+        have = to_beam = true;
+    }
+    // 2. a freed fighter to catch
+    if (!have && g->rescue_active) { target = g->rescue_x; have = true; }
+    // 3. the boss holding our ship - shoot it off him
+    if (!have && g->any_captive)
+        for (int i = 0; i < g->en.hi && !have; i++)
+            if (g->en.captive[i]) { target = g->en.x[i]; have = true; }
+    // 4. otherwise line up under the nearest ship sitting in formation.
+    // Chasing whatever is lowest instead just walks into the divers.
+    if (!have) {
+        fix_t best = gv_fix(9999);
+        for (int i = 0; i < g->en.hi; i++) {
+            if (g->en.state[i] != GV_ES_FORM) continue;
+            const fix_t d = gv_fabs(g->en.x[i] - g->player.x);
+            if (d < best) { best = d; target = g->en.x[i]; have = true; }
+        }
+    }
+    if (!have) return;
+
+    // Sidestep anything about to land on us, unless we want to be caught.
+    if (!to_beam) {
+        bool  danger = false;
+        fix_t threat = 0;
+
+        for (int t = 0; t < g->es.hi && !danger; t++) {
+            if (!g->es.used[t]) continue;
+            if (g->es.y[t] < g->player.y - gv_fix(80)) continue;
+            if (gv_fabs(g->es.x[t] - g->player.x) < gv_fix(14)) {
+                danger = true; threat = g->es.x[t];
+            }
+        }
+        // Anything not parked in formation is on a trajectory, so treat it as
+        // a threat once it is anywhere near our altitude.
+        for (int i = 0; i < g->en.hi && !danger; i++) {
+            const uint8_t st = g->en.state[i];
+            if (st == GV_ES_FREE || st == GV_ES_FORM) continue;
+            if (g->en.y[i] < g->player.y - gv_fix(110)) continue;
+            if (gv_fabs(g->en.x[i] - g->player.x) < gv_fix(26)) {
+                danger = true; threat = g->en.x[i];
+            }
+        }
+        if (danger)
+            target = threat < g->player.x ? g->player.x + gv_fix(36)
+                                          : g->player.x - gv_fix(36);
+    }
+
+    // Hold fire while closing on a beam, otherwise it just shoots the hovering
+    // boss down and never gets caught.
+    g->in.fire = !to_beam;
+
+    target = gv_clampf(target, gv_fix(16), gv_fix(GV_SCREEN_W - 16));
+    if (target < g->player.x - gv_fix(2))      g->in.left  = true;
+    else if (target > g->player.x + gv_fix(2)) g->in.right = true;
+}
+
 // --- enemy update ---------------------------------------------------------
 static void enemies_tick(gv_game *g) {
     const fix_t off_bottom = gv_fix(GV_SCREEN_H + 24);
@@ -490,8 +618,10 @@ static void enemies_tick(gv_game *g) {
         case GV_ES_DIVE:
         case GV_ES_FLYBY: {
             const bool more = gv_path_step(&g->en.path[i], &g->en.ang[i]);
-            g->en.x[i] += gv_vx(g->en.ang[i], g->en.spd[i]);
-            g->en.y[i] += gv_vy(g->en.ang[i], g->en.spd[i]);
+            if (more) {
+                g->en.x[i] += gv_vx(g->en.ang[i], g->en.spd[i]);
+                g->en.y[i] += gv_vy(g->en.ang[i], g->en.spd[i]);
+            }
 
             const bool gone = g->en.y[i] > off_bottom
                            || g->en.x[i] < off_left
@@ -528,8 +658,10 @@ static void enemies_tick(gv_game *g) {
             switch (g->en.phase[i]) {
             case GV_BEAM_APPROACH: {
                 const bool more = gv_path_step(&g->en.path[i], &g->en.ang[i]);
-                g->en.x[i] += gv_vx(g->en.ang[i], g->en.spd[i]);
-                g->en.y[i] += gv_vy(g->en.ang[i], g->en.spd[i]);
+                if (more) {
+                    g->en.x[i] += gv_vx(g->en.ang[i], g->en.spd[i]);
+                    g->en.y[i] += gv_vy(g->en.ang[i], g->en.spd[i]);
+                }
                 if (!more) {
                     g->en.phase[i] = GV_BEAM_OPEN;
                     g->en.timer[i] = 0;
@@ -682,6 +814,8 @@ static void player_die(gv_game *g) {
         g->player.dual = false;
     }
     snd(g, GV_SFX_PLAYER_BOOM);
+    g->deaths_this_stage++;
+    combo_break(g);
     g->mode       = GV_MODE_DYING;
     g->mode_timer = 0;
 }
@@ -691,7 +825,11 @@ static void shots_tick(gv_game *g) {
     for (int i = 0; i < g->ps.hi; i++) {
         if (!g->ps.used[i]) continue;
         g->ps.y[i] += g->ps.vy[i];
-        if (g->ps.y[i] < gv_fix(-8)) { g->ps.used[i] = 0; g->ps.live--; }
+        if (g->ps.y[i] < gv_fix(-8)) {
+            g->ps.used[i] = 0;
+            g->ps.live--;
+            combo_break(g);
+        }
     }
     while (g->ps.hi > 0 && !g->ps.used[g->ps.hi - 1]) g->ps.hi--;
 
@@ -737,7 +875,12 @@ static void kill_enemy(gv_game *g, int i) {
         g->any_captive   = false;
     }
 
-    add_score(g, diving ? SCORE_DIVE[kind] : SCORE_FORM[kind]);
+    if (diving) {
+        g->combo++;
+        add_score(g, SCORE_DIVE[kind] * dive_multiplier(g->combo));
+    } else {
+        add_score(g, SCORE_FORM[kind]);
+    }
     if (g->challenge) g->chal_killed++;
     gv_spawn_fx(g, g->en.x[i], g->en.y[i], kind == GV_EK_FLAGSHIP);
     snd(g, kind == GV_EK_FLAGSHIP ? GV_SFX_FLAGSHIP_BOOM : GV_SFX_ENEMY_BOOM);
@@ -810,6 +953,7 @@ static void clear_world(gv_game *g) {
 
 void gv_game_start(gv_game *g, int stage) {
     clear_world(g);
+    g->demo         = false;
     g->score        = 0;
     g->next_extra   = EXTRA_FIRST;
     g->player.lives = 3;
@@ -834,6 +978,15 @@ static void lose_life_restart(gv_game *g) {
         snd(g, GV_SFX_GAMEOVER);
     }
     g->mode_timer = 0;
+}
+
+// Attract mode plays the game for real, with a free ship every time.
+static void attract_begin(gv_game *g) {
+    g->demo         = true;
+    g->score        = 0;
+    g->player.lives = 3;
+    g->player.dual  = false;
+    player_reset(g);
 }
 
 static void mode_tick(gv_game *g) {
@@ -861,6 +1014,9 @@ static void mode_tick(gv_game *g) {
             if (g->challenge && g->chal_killed >= g->chal_spawned && g->chal_spawned > 0) {
                 add_score(g, 1000);   // perfect clear
                 snd(g, GV_SFX_PERFECT);
+            } else if (!g->challenge && g->deaths_this_stage == 0) {
+                add_score(g, CLEAN_STAGE_BONUS + (uint32_t)g->stage * 200u);
+                snd(g, GV_SFX_PERFECT);
             }
             g->mode = GV_MODE_STAGE_CLEAR;
             g->mode_timer = 0;
@@ -887,7 +1043,10 @@ static void mode_tick(gv_game *g) {
                 g->any_captive = true;
             }
             g->captor = -1;
-            if (--g->player.lives > 0) {
+            if (g->demo) {
+                player_reset(g);
+                g->mode = GV_MODE_ATTRACT;
+            } else if (--g->player.lives > 0) {
                 g->mode = GV_MODE_READY;
             } else {
                 g->mode = GV_MODE_GAMEOVER;
@@ -898,15 +1057,28 @@ static void mode_tick(gv_game *g) {
         break;
 
     case GV_MODE_DYING:
-        if (g->mode_timer > 90) lose_life_restart(g);
+        if (g->mode_timer > 90) {
+            if (g->demo) {
+                clear_world(g);
+                stage_begin(g, g->stage);
+                attract_begin(g);
+                g->mode = GV_MODE_ATTRACT;
+                g->mode_timer = 0;
+            } else {
+                lose_life_restart(g);
+            }
+        }
         break;
 
     case GV_MODE_GAMEOVER:
         if (g->mode_timer > 240 || g->in.start) {
+            const bool start = g->in.start;
             clear_world(g);
             g->mode = GV_MODE_ATTRACT;
             g->mode_timer = 0;
             stage_begin(g, 1);
+            attract_begin(g);
+            if (start) gv_game_start(g, 1);
         }
         break;
 
@@ -943,18 +1115,16 @@ void gv_game_init(gv_game *g, uint32_t seed, uint32_t high) {
     g->beamer     = -1;
     g->captor     = -1;
 
-    // Park the (absent) player mid-screen so attract-mode dives have something
-    // sensible to aim at.
-    g->player.x     = gv_fix(GV_SCREEN_W / 2);
-    g->player.y     = gv_fix(PLAYER_Y);
-    g->player.alive = false;
-
     stage_begin(g, 1);
     form_tick(g);
+    attract_begin(g);
 }
 
 void gv_game_tick(gv_game *g) {
     g->tick++;
+
+    if (g->demo && (g->mode == GV_MODE_ATTRACT || g->mode == GV_MODE_PLAY))
+        gv_game_demo(g);
 
     gv_star_tick(&g->stars);
     form_tick(g);
@@ -972,7 +1142,7 @@ void gv_game_tick(gv_game *g) {
         maybe_capture(g);
         rescue_tick(g);
         shots_tick(g);
-        if (g->mode == GV_MODE_PLAY) {
+        if (g->mode == GV_MODE_PLAY || (g->demo && g->mode == GV_MODE_ATTRACT)) {
             player_tick(g);
             collide(g);
         }
@@ -1000,24 +1170,22 @@ int gv_enemy_sprite(const gv_game *g, int i) {
     }
 }
 
-void gv_game_key(gv_game *g, SDL_Scancode sc, bool down) {
-    switch (sc) {
-    case SDL_SCANCODE_LEFT:  case SDL_SCANCODE_A: g->in.left  = down; break;
-    case SDL_SCANCODE_RIGHT: case SDL_SCANCODE_D: g->in.right = down; break;
-    case SDL_SCANCODE_SPACE: case SDL_SCANCODE_Z:
-    case SDL_SCANCODE_LCTRL: g->in.fire = down; break;
+void gv_game_action(gv_game *g, int action, bool down) {
+    switch (action) {
+    // Held state. The caller composes keyboard and gamepad and sets these
+    // every frame, so neither source can stamp on the other.
+    case GV_ACT_LEFT:  g->in.left  = down; break;
+    case GV_ACT_RIGHT: g->in.right = down; break;
+    case GV_ACT_FIRE:  g->in.fire  = down; break;
 
-    case SDL_SCANCODE_RETURN:
-    case SDL_SCANCODE_KP_ENTER:
-        if (down) g->in.start = true;
-        break;
+    // Edges.
+    case GV_ACT_START:   if (down) g->in.start   = true;         break;
+    case GV_ACT_PAUSE:   if (down) g->paused     = !g->paused;   break;
+    case GV_ACT_STEP:    if (down) g->step_once  = true;         break;
+    case GV_ACT_RESTART: if (down) gv_game_start(g, 1);          break;
+    case GV_ACT_DEBUG:   if (down) g->debug      = !g->debug;    break;
 
-    case SDL_SCANCODE_F1: if (down) g->debug  = !g->debug;  break;
-    case SDL_SCANCODE_P:  if (down) g->paused = !g->paused; break;
-    case SDL_SCANCODE_F2: if (down) g->step_once = true;    break;
-    case SDL_SCANCODE_R:  if (down) start_game(g);          break;
-
-    case SDL_SCANCODE_F3:
+    case GV_ACT_PATH:
         // Cycle the path catalogue: off -> path 1 .. N -> off.
         if (down) {
             g->debug = true;

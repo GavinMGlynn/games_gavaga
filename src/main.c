@@ -1,4 +1,5 @@
-// main.c - SDL3 callback entry points and the fixed-timestep loop.
+// main.c - SDL3 callback entry points, the fixed-timestep loop, and all
+// platform I/O: input devices, the debug window, audio and the score file.
 //
 // Logic runs at exactly GV_TICK_HZ (60.60606 Hz - 16.5 ms, the arcade rate)
 // off an accumulator. Rendering is decoupled: SDL_AppIterate draws once per
@@ -13,6 +14,8 @@
 #include "gv_common.h"
 #include "gv_game.h"
 #include "gv_render.h"
+#include "gv_debug.h"
+#include "gv_font.h"
 #include "gv_audio.h"
 #include "gv_score.h"
 
@@ -21,10 +24,27 @@
 #define SAVE_INTERVAL_NS 5000000000ULL
 
 #define WINDOW_SCALE 3
+#define DEBUG_SCALE  2
+
+// Analog stick travel before it counts as a direction, and trigger pull before
+// it counts as a press.
+#define PAD_DEADZONE 8000
+#define PAD_TRIGGER  8000
+
+// One set of held controls per input device, OR-ed together each frame so the
+// keyboard and a gamepad cannot stamp on each other's state.
+typedef struct {
+    bool left, right, fire;
+} gv_held;
 
 typedef struct {
     SDL_Window   *win;
     SDL_Renderer *ren;
+
+    // The debug view gets its own window so it never draws over the game.
+    SDL_Window   *dbg_win;
+    SDL_Renderer *dbg_ren;
+
     gv_game      *game;
 
     uint64_t last_ns;
@@ -32,6 +52,10 @@ typedef struct {
 
     uint64_t fps_mark_ns;
     int      fps_frames;
+
+    gv_held        kb, pad;
+    SDL_Gamepad   *pad_dev;
+    SDL_JoystickID pad_id;
 
     // Headless capture: --shot <file.bmp> [--shot-at <tick>] fast-forwards the
     // simulation, writes one frame and exits. Handy for eyeballing changes
@@ -44,8 +68,9 @@ typedef struct {
     bool        autoplay;
     bool        godmode;
     int         start_stage;
-    uint32_t    seed;
     uint16_t    start_path;
+    uint32_t    seed;
+    bool        seed_set;
 
     bool     save_due;
     uint64_t last_save_ns;
@@ -58,6 +83,7 @@ typedef struct {
     bool     tr_captive, tr_dual, tr_rescue, tr_beam;
 } gv_app;
 
+// --- tracing --------------------------------------------------------------
 static const char *mode_label(uint8_t m) {
     switch (m) {
     case GV_MODE_ATTRACT:     return "attract";
@@ -100,82 +126,6 @@ static void trace_tick(gv_app *app) {
     }
 }
 
-// A crude bot for soak testing (--autoplay). It walks *into* open tractor
-// beams on purpose, because getting captured, shooting the boss and docking
-// the freed fighter is the longest code path in the game and the one least
-// likely to be reached by leaving the game running unattended.
-static void autoplay_input(gv_game *g) {
-    if (g->mode == GV_MODE_ATTRACT || g->mode == GV_MODE_GAMEOVER) {
-        g->in.start = true;
-        return;
-    }
-    g->in.left = g->in.right = false;
-    g->in.fire = true;
-    if (!g->player.alive) return;
-
-    fix_t target   = g->player.x;
-    bool  have     = false;
-    bool  to_beam  = false;
-
-    // 1. an open beam - stand in it
-    for (int i = 0; i < g->en.hi && !have; i++) {
-        fix_t top, bottom, half_bot;
-        if (!gv_beam_shape(g, i, &top, &bottom, &half_bot)) continue;
-        target = g->en.x[i];
-        have = to_beam = true;
-    }
-    // 2. a freed fighter to catch
-    if (!have && g->rescue_active) { target = g->rescue_x; have = true; }
-    // 3. the boss holding our ship - shoot it off him
-    if (!have && g->any_captive)
-        for (int i = 0; i < g->en.hi && !have; i++)
-            if (g->en.captive[i]) { target = g->en.x[i]; have = true; }
-    // 4. otherwise line up under the nearest ship sitting in formation.
-    // Chasing whatever is lowest instead just walks into the divers.
-    if (!have) {
-        fix_t best = gv_fix(9999);
-        for (int i = 0; i < g->en.hi; i++) {
-            if (g->en.state[i] != GV_ES_FORM) continue;
-            const fix_t d = gv_fabs(g->en.x[i] - g->player.x);
-            if (d < best) { best = d; target = g->en.x[i]; have = true; }
-        }
-    }
-    if (!have) return;
-
-    // Sidestep anything about to land on us - except when we are walking into
-    // a beam on purpose.
-    if (!to_beam) {
-        bool  danger = false;
-        fix_t threat = 0;
-
-        for (int s = 0; s < g->es.hi && !danger; s++) {
-            if (!g->es.used[s]) continue;
-            if (g->es.y[s] < g->player.y - gv_fix(80)) continue;
-            if (gv_fabs(g->es.x[s] - g->player.x) < gv_fix(14)) { danger = true; threat = g->es.x[s]; }
-        }
-        // Anything not parked in formation is on a trajectory, so treat it as
-        // a threat once it is anywhere near our altitude.
-        for (int i = 0; i < g->en.hi && !danger; i++) {
-            const uint8_t st = g->en.state[i];
-            if (st == GV_ES_FREE || st == GV_ES_FORM) continue;
-            if (g->en.y[i] < g->player.y - gv_fix(110)) continue;
-            if (gv_fabs(g->en.x[i] - g->player.x) < gv_fix(26)) { danger = true; threat = g->en.x[i]; }
-        }
-        if (danger)
-            target = threat < g->player.x ? g->player.x + gv_fix(36)
-                                          : g->player.x - gv_fix(36);
-    }
-
-    // Hold fire while closing on a beam, otherwise the bot simply shoots the
-    // hovering boss down and never gets caught - which is good play, but not
-    // what this run is trying to exercise.
-    g->in.fire = !to_beam;
-
-    target = gv_clampf(target, gv_fix(16), gv_fix(GV_SCREEN_W - 16));
-    if (target < g->player.x - gv_fix(2))      g->in.left  = true;
-    else if (target > g->player.x + gv_fix(2)) g->in.right = true;
-}
-
 // Effects leave the simulation as data; this is where they become sound and
 // filesystem writes.
 static void drain_events(gv_app *app) {
@@ -188,6 +138,89 @@ static void drain_events(gv_app *app) {
         app->save_due = true;
     }
     if (app->trace) trace_tick(app);
+}
+
+// --- gamepad --------------------------------------------------------------
+static void pad_open_first(gv_app *app) {
+    if (app->pad_dev) return;
+
+    int count = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&count);
+    if (!ids) return;
+
+    for (int i = 0; i < count && !app->pad_dev; i++) {
+        app->pad_dev = SDL_OpenGamepad(ids[i]);
+        if (app->pad_dev) {
+            app->pad_id = ids[i];
+            const char *name = SDL_GetGamepadName(app->pad_dev);
+            SDL_Log("gavaga: gamepad connected: %s", name ? name : "unnamed");
+        }
+    }
+    SDL_free(ids);
+}
+
+static void pad_close(gv_app *app) {
+    if (!app->pad_dev) return;
+    SDL_CloseGamepad(app->pad_dev);
+    app->pad_dev = nullptr;
+    app->pad_id  = 0;
+    SDL_zero(app->pad);
+    SDL_Log("gavaga: gamepad disconnected");
+}
+
+static void pad_poll(gv_app *app) {
+    SDL_zero(app->pad);
+    if (!app->pad_dev) return;
+
+    const Sint16 x = SDL_GetGamepadAxis(app->pad_dev, SDL_GAMEPAD_AXIS_LEFTX);
+    if (x < -PAD_DEADZONE) app->pad.left  = true;
+    if (x >  PAD_DEADZONE) app->pad.right = true;
+
+    if (SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_DPAD_LEFT))
+        app->pad.left = true;
+    if (SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_DPAD_RIGHT))
+        app->pad.right = true;
+
+    // Any face button fires, and so do the shoulders and triggers - whatever
+    // your thumb lands on should shoot.
+    if (SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_SOUTH) ||
+        SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_EAST)  ||
+        SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_WEST)  ||
+        SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_NORTH) ||
+        SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) ||
+        SDL_GetGamepadButton(app->pad_dev, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)  ||
+        SDL_GetGamepadAxis(app->pad_dev, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > PAD_TRIGGER ||
+        SDL_GetGamepadAxis(app->pad_dev, SDL_GAMEPAD_AXIS_LEFT_TRIGGER)  > PAD_TRIGGER)
+        app->pad.fire = true;
+}
+
+// --- debug window ---------------------------------------------------------
+static void debug_window_open(gv_app *app) {
+    if (app->dbg_win) return;
+
+    if (!SDL_CreateWindowAndRenderer("Gavaga - debug",
+                                     GV_DBG_W * DEBUG_SCALE, GV_DBG_H * DEBUG_SCALE,
+                                     SDL_WINDOW_RESIZABLE,
+                                     &app->dbg_win, &app->dbg_ren)) {
+        SDL_Log("gavaga: could not open the debug window: %s", SDL_GetError());
+        app->dbg_win = nullptr;
+        app->dbg_ren = nullptr;
+        app->game->debug = false;
+        return;
+    }
+    SDL_SetRenderVSync(app->dbg_ren, 1);
+    SDL_SetRenderLogicalPresentation(app->dbg_ren, GV_DBG_W, GV_DBG_H,
+                                     SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    gv_font_init(app->dbg_ren);
+}
+
+static void debug_window_close(gv_app *app) {
+    if (!app->dbg_win) return;
+    gv_font_quit_renderer(app->dbg_ren);
+    SDL_DestroyRenderer(app->dbg_ren);
+    SDL_DestroyWindow(app->dbg_win);
+    app->dbg_ren = nullptr;
+    app->dbg_win = nullptr;
 }
 
 // Reads back the current render target. Must run before SDL_RenderPresent.
@@ -203,6 +236,7 @@ static bool save_shot(SDL_Renderer *ren, const char *path) {
     return ok;
 }
 
+// --- init -----------------------------------------------------------------
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     SDL_SetAppMetadata("Gavaga", "0.1.0", "dev.gavin.gavaga");
 
@@ -234,19 +268,20 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
             app->start_mute = true;
         else if (SDL_strcmp(argv[i], "--autoplay") == 0)
             app->autoplay = true;
-        else if (SDL_strcmp(argv[i], "--trace") == 0)
-            app->trace = true;
         else if (SDL_strcmp(argv[i], "--godmode") == 0)
             app->godmode = true;
-        else if (SDL_strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
-            app->seed = (uint32_t)SDL_strtoul(argv[++i], nullptr, 10);
         else if (SDL_strcmp(argv[i], "--stage") == 0 && i + 1 < argc)
             app->start_stage = SDL_atoi(argv[++i]);
+        else if (SDL_strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+            app->seed = (uint32_t)SDL_strtoul(argv[++i], nullptr, 10);
+            app->seed_set = true;   // so --seed 0 means 0, not "unset"
+        }
+        else if (SDL_strcmp(argv[i], "--trace") == 0)
+            app->trace = true;
         else if (SDL_strcmp(argv[i], "--help") == 0) {
-            SDL_Log("usage: gavaga [--debug] [--path N] [--play] [--stage N]"
-                    " [--autoplay] [--godmode] [--seed N]\n"
-                    "              [--mute] [--trace]"
-                    "              [--shot FILE.bmp] [--shot-at TICK]");
+            SDL_Log("usage: gavaga [--play] [--stage N] [--seed N] [--mute]\n"
+                    "              [--debug] [--path N] [--autoplay] [--godmode]\n"
+                    "              [--trace] [--shot FILE.bmp] [--shot-at TICK]");
             return SDL_APP_SUCCESS;
         }
     }
@@ -272,9 +307,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
     if (!gv_render_init(app->ren)) return SDL_APP_FAILURE;
 
-    // Audio is optional: no device means a silent game, not a failed start.
+    // Audio and gamepads are both optional: a missing one is not fatal.
     gv_audio_init();
     gv_audio_set_muted(app->start_mute);
+
+    if (SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+        pad_open_first(app);
+        if (!app->pad_dev) SDL_Log("gavaga: no gamepad detected (keyboard only)");
+    } else {
+        SDL_Log("gavaga: gamepad subsystem unavailable: %s", SDL_GetError());
+    }
 
     app->game = SDL_calloc(1, sizeof *app->game);
     if (!app->game) {
@@ -282,15 +324,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
     // The only allocations in the program happen above this line.
+
     // A fixed seed makes a run byte-for-byte repeatable, which is the whole
     // point of the integer-only simulation - handy for reproducing a bug or a
     // screenshot.
     gv_game_init(app->game,
-                 app->seed ? app->seed : (uint32_t)SDL_GetPerformanceCounter(),
+                 app->seed_set ? app->seed : (uint32_t)SDL_GetPerformanceCounter(),
                  gv_score_load());
     app->game->debug      = app->start_debug || app->start_path != GV_PATH_NONE;
-    app->game->godmode    = app->godmode;
     app->game->debug_path = app->start_path;
+    app->game->godmode    = app->godmode;
     if (app->start_play || app->start_stage > 0 || app->autoplay)
         gv_game_start(app->game, app->start_stage > 0 ? app->start_stage : 1);
 
@@ -302,33 +345,84 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_CONTINUE;
 }
 
+// --- events ---------------------------------------------------------------
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
-    gv_app *app = appstate;
+    gv_app  *app = appstate;
+    gv_game *g   = app->game;
 
     switch (event->type) {
     case SDL_EVENT_QUIT:
         return SDL_APP_SUCCESS;
 
-    case SDL_EVENT_KEY_DOWN:
-        if (event->key.scancode == SDL_SCANCODE_ESCAPE) return SDL_APP_SUCCESS;
-        if (event->key.scancode == SDL_SCANCODE_F11 ||
-            (event->key.scancode == SDL_SCANCODE_RETURN && (event->key.mod & SDL_KMOD_ALT))) {
-            const bool fs = (SDL_GetWindowFlags(app->win) & SDL_WINDOW_FULLSCREEN) != 0;
-            SDL_SetWindowFullscreen(app->win, !fs);
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        // Closing the debug window just puts the view away; closing the game
+        // window quits.
+        if (app->dbg_win && event->window.windowID == SDL_GetWindowID(app->dbg_win)) {
+            g->debug = false;
             return SDL_APP_CONTINUE;
         }
-        if (event->key.repeat) return SDL_APP_CONTINUE;
-        if (event->key.scancode == SDL_SCANCODE_M) {
-            // Mute lives outside the simulation, with the rest of the audio.
-            gv_audio_set_muted(!gv_audio_muted());
-            return SDL_APP_CONTINUE;
-        }
-        gv_game_key(app->game, event->key.scancode, true);
+        return SDL_APP_SUCCESS;
+
+    case SDL_EVENT_GAMEPAD_ADDED:
+        pad_open_first(app);
         break;
 
-    case SDL_EVENT_KEY_UP:
-        gv_game_key(app->game, event->key.scancode, false);
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        if (event->gdevice.which == app->pad_id) pad_close(app);
         break;
+
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        switch (event->gbutton.button) {
+        case SDL_GAMEPAD_BUTTON_START: gv_game_action(g, GV_ACT_START, true); break;
+        case SDL_GAMEPAD_BUTTON_BACK:  gv_game_action(g, GV_ACT_PAUSE, true); break;
+        default: break;
+        }
+        break;
+
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP: {
+        const bool down = event->type == SDL_EVENT_KEY_DOWN;
+
+        // Held controls first - these need the key-up too.
+        switch (event->key.scancode) {
+        case SDL_SCANCODE_LEFT:  case SDL_SCANCODE_A:
+            app->kb.left = down;  return SDL_APP_CONTINUE;
+        case SDL_SCANCODE_RIGHT: case SDL_SCANCODE_D:
+            app->kb.right = down; return SDL_APP_CONTINUE;
+        case SDL_SCANCODE_SPACE: case SDL_SCANCODE_Z: case SDL_SCANCODE_LCTRL:
+            app->kb.fire = down;  return SDL_APP_CONTINUE;
+        default: break;
+        }
+
+        if (!down || event->key.repeat) return SDL_APP_CONTINUE;
+
+        switch (event->key.scancode) {
+        case SDL_SCANCODE_ESCAPE:
+            return SDL_APP_SUCCESS;
+        case SDL_SCANCODE_F11:
+            SDL_SetWindowFullscreen(app->win,
+                (SDL_GetWindowFlags(app->win) & SDL_WINDOW_FULLSCREEN) == 0);
+            break;
+        case SDL_SCANCODE_M:
+            gv_audio_set_muted(!gv_audio_muted());
+            break;
+        case SDL_SCANCODE_RETURN:
+        case SDL_SCANCODE_KP_ENTER:
+            if (event->key.mod & SDL_KMOD_ALT)
+                SDL_SetWindowFullscreen(app->win,
+                    (SDL_GetWindowFlags(app->win) & SDL_WINDOW_FULLSCREEN) == 0);
+            else
+                gv_game_action(g, GV_ACT_START, true);
+            break;
+        case SDL_SCANCODE_P:  gv_game_action(g, GV_ACT_PAUSE,   true); break;
+        case SDL_SCANCODE_F2: gv_game_action(g, GV_ACT_STEP,    true); break;
+        case SDL_SCANCODE_R:  gv_game_action(g, GV_ACT_RESTART, true); break;
+        case SDL_SCANCODE_F1: gv_game_action(g, GV_ACT_DEBUG,   true); break;
+        case SDL_SCANCODE_F3: gv_game_action(g, GV_ACT_PATH,    true); break;
+        default: break;
+        }
+        break;
+    }
 
     default:
         break;
@@ -336,19 +430,39 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     return SDL_APP_CONTINUE;
 }
 
+// --- frame ----------------------------------------------------------------
+static void step_once(gv_app *app) {
+    gv_game *g = app->game;
+
+    // Compose the input sources, then let the demo brain override if it is
+    // driving this run.
+    gv_game_action(g, GV_ACT_LEFT,  app->kb.left  || app->pad.left);
+    gv_game_action(g, GV_ACT_RIGHT, app->kb.right || app->pad.right);
+    gv_game_action(g, GV_ACT_FIRE,  app->kb.fire  || app->pad.fire);
+    if (app->autoplay) gv_game_demo(g);
+
+    gv_game_tick(g);
+    drain_events(app);
+}
+
 SDL_AppResult SDL_AppIterate(void *appstate) {
     gv_app  *app = appstate;
     gv_game *g   = app->game;
 
+    pad_poll(app);
+
     // Capture mode: fast-forward the simulation, draw once, write, exit.
     if (app->shot_path) {
-        while (g->tick < app->shot_at) {
-            if (app->autoplay) autoplay_input(g);
-            gv_game_tick(g);
-            drain_events(app);
+        while (g->tick < app->shot_at) step_once(app);
+        SDL_Renderer *target = app->ren;
+        if (g->debug) {
+            debug_window_open(app);
+            if (app->dbg_ren) target = app->dbg_ren;
         }
-        gv_render_frame(g, app->ren);
-        const bool ok = save_shot(app->ren, app->shot_path);
+        if (target == app->ren) gv_render_frame(g, app->ren);
+        else                    gv_debug_draw(g, app->dbg_ren);
+
+        const bool ok = save_shot(target, app->shot_path);
         SDL_Log("gavaga: wrote %s at tick %u", app->shot_path, g->tick);
         return ok ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
     }
@@ -367,19 +481,17 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     int ticks = 0;
     while (app->accum_ns >= GV_TICK_NS) {
         app->accum_ns -= GV_TICK_NS;
-        if (app->autoplay) autoplay_input(g);
         if (!g->paused) {
-            gv_game_tick(g);
+            step_once(app);
             ticks++;
         } else if (g->step_once) {
-            gv_game_tick(g);
+            step_once(app);
             g->step_once = false;
             ticks++;
         }
         // While paused the accumulated time is still consumed, just not
         // simulated. Letting it pile up instead would burst-run every missed
         // tick the moment you unpause.
-        drain_events(app);   // per tick, so nothing overflows the sound queue
     }
     g->ticks_last_frame = ticks;
 
@@ -400,6 +512,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     gv_render_frame(g, app->ren);
     SDL_RenderPresent(app->ren);
+
+    if (g->debug && !app->dbg_win) debug_window_open(app);
+    if (!g->debug && app->dbg_win) debug_window_close(app);
+    if (app->dbg_win) {
+        gv_debug_draw(g, app->dbg_ren);
+        SDL_RenderPresent(app->dbg_ren);
+    }
     return SDL_APP_CONTINUE;
 }
 
@@ -411,6 +530,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     if (app->game && (app->save_due || app->game->want_save_high))
         gv_score_save(app->game->high);
 
+    pad_close(app);
+    debug_window_close(app);
     gv_audio_quit();
     gv_render_quit();
     SDL_free(app->game);
