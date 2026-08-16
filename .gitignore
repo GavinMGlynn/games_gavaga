@@ -1,0 +1,16 @@
+build/
+build-*/
+out/
+_deps/
+compile_commands.json
+.cache/
+.vs/
+.vscode/
+.idea/
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.dSYM/
+.DS_Store

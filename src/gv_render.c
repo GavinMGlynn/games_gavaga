@@ -1,0 +1,142 @@
+// gv_render.c - draws one frame of whatever the simulation last produced.
+//
+// Positions are snapped to whole logical pixels. The playfield is 224x288 and
+// is presented with INTEGER_SCALE, so sub-pixel interpolation between ticks
+// would only smear the pixel grid; the render rate is still free-running and
+// independent of the 60.606 Hz logic rate.
+#include "gv_render.h"
+#include "gv_sprite.h"
+#include "gv_font.h"
+#include "gv_debug.h"
+
+static const SDL_Color C_WHITE = { 255, 255, 255, 255 };
+static const SDL_Color C_RED   = { 232,  56,  40, 255 };
+static const SDL_Color C_CYAN  = {  72, 224, 224, 255 };
+static const SDL_Color C_YELL  = { 248, 224,  88, 255 };
+static const SDL_Color C_DIM   = { 128, 128, 144, 255 };
+
+bool gv_render_init(SDL_Renderer *ren) {
+    return gv_sprite_init(ren) && gv_font_init(ren);
+}
+
+void gv_render_quit(void) {
+    gv_font_quit();
+    gv_sprite_quit();
+}
+
+void gv_draw_sprite_px(SDL_Renderer *ren, int spr, int x, int y) {
+    const SDL_FRect *src = gv_sprite_rect(spr);
+    const SDL_FRect dst = { (float)x, (float)y, src->w, src->h };
+    SDL_RenderTexture(ren, gv_sprite_texture(), src, &dst);
+}
+
+void gv_draw_sprite(SDL_Renderer *ren, int spr, fix_t x, fix_t y) {
+    const SDL_FRect *src = gv_sprite_rect(spr);
+    gv_draw_sprite_px(ren, spr,
+                      gv_unfix(x) - (int)src->w / 2,
+                      gv_unfix(y) - (int)src->h / 2);
+}
+
+// --- HUD ------------------------------------------------------------------
+static void draw_hud(const gv_game *g, SDL_Renderer *ren) {
+    // Blink "1UP" like the original marquee.
+    if ((g->tick / 20) & 1u) gv_font_draw(ren, 8, 2, C_RED, "1UP");
+    gv_font_printf(ren, 8, 11, C_WHITE, "%6u", g->score);
+
+    gv_font_center(ren, 2, C_RED, "HIGH SCORE");
+    char buf[16];
+    SDL_snprintf(buf, sizeof buf, "%6u", g->high);
+    gv_font_center(ren, 11, C_WHITE, buf);
+
+    // Lives, bottom left.
+    const int lives = gv_clampi(g->player.lives - 1, 0, 5);
+    for (int i = 0; i < lives; i++)
+        gv_draw_sprite_px(ren, GV_SPR_LIFE, 4 + i * 10, GV_SCREEN_H - 10);
+
+    // Stage badges, bottom right.
+    const int badges = gv_clampi(g->stage, 0, 8);
+    for (int i = 0; i < badges; i++)
+        gv_draw_sprite_px(ren, GV_SPR_BADGE, GV_SCREEN_W - 12 - i * 10, GV_SCREEN_H - 10);
+}
+
+static void draw_mode_text(const gv_game *g, SDL_Renderer *ren) {
+    char buf[32];
+
+    switch (g->mode) {
+    case GV_MODE_ATTRACT:
+        // Sits below the formation block so the two never overlap.
+        gv_font_center(ren, 148, C_CYAN, "G A V A G A");
+        gv_font_center(ren, 160, C_DIM,  "A GALAGA-ISH THING");
+        if ((g->tick / 30) & 1u)
+            gv_font_center(ren, 184, C_YELL, "PRESS ENTER TO START");
+        gv_font_center(ren, 210, C_DIM, "ARROWS MOVE   SPACE FIRE");
+        gv_font_center(ren, 220, C_DIM, "F1 DEBUG  P PAUSE  R RESET");
+        break;
+
+    case GV_MODE_READY:
+        SDL_snprintf(buf, sizeof buf, "STAGE %d", g->stage);
+        gv_font_center(ren, 140, C_CYAN, g->challenge ? "CHALLENGING STAGE" : buf);
+        if (g->mode_timer > 40) gv_font_center(ren, 156, C_RED, "READY");
+        break;
+
+    case GV_MODE_STAGE_CLEAR:
+        if (g->challenge) {
+            SDL_snprintf(buf, sizeof buf, "%u OF %u HITS", g->chal_killed, g->chal_spawned);
+            gv_font_center(ren, 140, C_CYAN, buf);
+            if (g->chal_spawned > 0 && g->chal_killed >= g->chal_spawned)
+                gv_font_center(ren, 156, C_YELL, "PERFECT  1000 PTS");
+        } else {
+            gv_font_center(ren, 148, C_CYAN, "STAGE CLEAR");
+        }
+        break;
+
+    case GV_MODE_GAMEOVER:
+        gv_font_center(ren, 148, C_RED, "GAME OVER");
+        break;
+
+    default: break;
+    }
+
+    if (g->paused) gv_font_center(ren, 176, C_YELL, "PAUSED  F2 STEPS");
+}
+
+// --- frame ----------------------------------------------------------------
+void gv_render_frame(const gv_game *g, SDL_Renderer *ren) {
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+
+    gv_star_draw(&g->stars, ren);
+
+    // Enemies.
+    for (int i = 0; i < g->en.hi; i++) {
+        if (g->en.state[i] == GV_ES_FREE) continue;
+        gv_draw_sprite(ren, gv_enemy_sprite(g, i), g->en.x[i], g->en.y[i]);
+    }
+
+    // Player shots.
+    for (int i = 0; i < g->ps.hi; i++) {
+        if (!g->ps.used[i]) continue;
+        gv_draw_sprite(ren, GV_SPR_PSHOT, g->ps.x[i], g->ps.y[i]);
+    }
+
+    // Enemy shots.
+    for (int i = 0; i < g->es.hi; i++) {
+        if (!g->es.used[i]) continue;
+        gv_draw_sprite(ren, GV_SPR_ESHOT, g->es.x[i], g->es.y[i]);
+    }
+
+    // Player - flashes while the respawn invulnerability is running.
+    if (g->player.alive && (g->player.invuln == 0 || ((g->tick / 4) & 1u)))
+        gv_draw_sprite(ren, GV_SPR_PLAYER, g->player.x, g->player.y);
+
+    // Explosions.
+    for (int i = 0; i < g->fx.hi; i++) {
+        if (!g->fx.used[i]) continue;
+        gv_draw_sprite(ren, GV_SPR_BOOM0 + g->fx.frame[i], g->fx.x[i], g->fx.y[i]);
+    }
+
+    draw_hud(g, ren);
+    draw_mode_text(g, ren);
+
+    if (g->debug) gv_debug_draw(g, ren);
+}
