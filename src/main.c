@@ -197,9 +197,14 @@ static void toggle_fullscreen(gv_app *app) {
     if (!app->win) return;
 
     if (app->faux_fs) {
+        // Let the decoration change land before resizing. Stacking the two
+        // together loses the border under WSLg, and a window with no title bar
+        // and no way to get one back is a great deal worse than no fullscreen.
         SDL_SetWindowBordered(app->win, true);
+        SDL_SyncWindow(app->win);
         SDL_SetWindowSize(app->win, app->pre_fs_w, app->pre_fs_h);
         SDL_SetWindowPosition(app->win, app->pre_fs_x, app->pre_fs_y);
+        SDL_SyncWindow(app->win);
         app->faux_fs = false;
     } else {
         SDL_Rect b;
@@ -210,8 +215,10 @@ static void toggle_fullscreen(gv_app *app) {
         SDL_GetWindowSize(app->win, &app->pre_fs_w, &app->pre_fs_h);
 
         SDL_SetWindowBordered(app->win, false);
+        SDL_SyncWindow(app->win);
         SDL_SetWindowPosition(app->win, b.x, b.y);
         SDL_SetWindowSize(app->win, b.w, b.h);
+        SDL_SyncWindow(app->win);
         app->faux_fs = true;
     }
 
@@ -810,6 +817,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     // run opens the size of a monitor.
     if (app->faux_fs && app->win) {
         SDL_SetWindowBordered(app->win, true);
+        SDL_SyncWindow(app->win);
         SDL_SetWindowSize(app->win, app->pre_fs_w, app->pre_fs_h);
         SDL_SetWindowPosition(app->win, app->pre_fs_x, app->pre_fs_y);
         SDL_SyncWindow(app->win);
