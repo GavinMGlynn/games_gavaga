@@ -13,6 +13,7 @@ option(GAVAGA_SDL_SHARED     "Build the fetched SDL3 as a shared library"     OF
 option(GAVAGA_WERROR         "Treat compiler warnings as errors"              OFF)
 option(GAVAGA_TESTS          "Build the unit tests"                           ON)
 option(GAVAGA_ASAN           "Build with address+UB sanitizers"               OFF)
+option(GAVAGA_SOUNDCHECK     "Build tools/check_sounds.c, the audio harness"  OFF)
 
 set(GAVAGA_SDL_TAG "release-3.2.30" CACHE STRING
     "Git tag of SDL3 to fetch (pinned to the 3.2.x release line)")
@@ -182,6 +183,15 @@ endfunction()
 
 gavaga_configure(gavaga_core)
 gavaga_configure(gavaga)
+
+# The audio harness. Not a test: it needs SDL_AUDIODRIVER=disk and leaves a
+# capture behind for tools/measure_sounds.py to judge, which is more than ctest
+# should be doing.
+if(GAVAGA_SOUNDCHECK)
+    add_executable(gavaga_soundcheck tools/check_sounds.c)
+    target_link_libraries(gavaga_soundcheck PRIVATE gavaga_core)
+    gavaga_configure(gavaga_soundcheck)
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests

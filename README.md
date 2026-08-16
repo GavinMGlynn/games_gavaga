@@ -197,8 +197,18 @@ music bed ----------------------> dry bus (ducked by the effects)
 dry + reverb(send) -> master -> soft clip -> out
 ```
 
-Every effect is verified audible by `tools/`-style harness runs against SDL's
-disk audio driver, which needs no device and no window.
+Every effect can be checked without a sound card, a window or a keypress —
+useful over ssh, and the only way to catch a clip trimmed to nothing or a synth
+definition left at zero volume, neither of which breaks the build:
+
+```sh
+cmake -B build -DGAVAGA_SOUNDCHECK=ON && cmake --build build -j
+SDL_AUDIODRIVER=disk ./build/gavaga_soundcheck
+python3 tools/measure_sounds.py
+```
+
+It plays all thirteen effects into SDL's disk driver and reports peak and RMS
+for each, naming any that came out silent.
 
 If there is no audio device — headless CI, say — the game logs it and runs
 silently rather than failing to start.
