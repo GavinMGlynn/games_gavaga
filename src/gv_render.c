@@ -49,6 +49,10 @@ void gv_draw_sprite_rot(SDL_Renderer *ren, int spr, fix_t x, fix_t y, ang_t a) {
 
 // --- tractor beams --------------------------------------------------------
 static void draw_beams(const gv_game *g, SDL_Renderer *ren) {
+    #define CAP ((GV_BEAM_LEN + 2) * 2)
+    static SDL_FRect bright[CAP], dim[CAP];
+    int nbright = 0, ndim = 0;
+
     SDL_BlendMode prev = SDL_BLENDMODE_NONE;
     SDL_GetRenderDrawBlendMode(ren, &prev);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
@@ -62,15 +66,26 @@ static void draw_beams(const gv_game *g, SDL_Renderer *ren) {
         const float ex = (float)gv_unfix(g->en.x[i]);
         const float hb = (float)gv_unfix(half_bot);
 
-        for (int y = y0; y <= y1; y++) {
+        // Same batching problem as the starfield: a colour change per scanline
+        // is 128 draw calls. Collect the two band shades and issue two.
+        for (int y = y0; y <= y1 && (nbright < CAP && ndim < CAP); y++) {
             const float t = y1 > y0 ? (float)(y - y0) / (float)(y1 - y0) : 0.0f;
             const float half = (float)GV_BEAM_HALF_TOP
                              + (hb - (float)GV_BEAM_HALF_TOP) * t;
+            const SDL_FRect row = { ex - half, (float)y, half * 2.0f, 1.0f };
             // Bands scrolling down the cone sell the pulling motion.
-            const int band = ((y + (int)(g->tick * 2u)) / 4) & 1;
-            SDL_SetRenderDrawColor(ren, 150, 235, 255, band ? 150 : 60);
-            SDL_RenderLine(ren, ex - half, (float)y, ex + half, (float)y);
+            if (((y + (int)(g->tick * 2u)) / 4) & 1) bright[nbright++] = row;
+            else                                     dim[ndim++]       = row;
         }
+    }
+
+    if (nbright) {
+        SDL_SetRenderDrawColor(ren, 150, 235, 255, 150);
+        SDL_RenderFillRects(ren, bright, nbright);
+    }
+    if (ndim) {
+        SDL_SetRenderDrawColor(ren, 150, 235, 255, 60);
+        SDL_RenderFillRects(ren, dim, ndim);
     }
     SDL_SetRenderDrawBlendMode(ren, prev);
 }

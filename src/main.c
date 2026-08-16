@@ -23,7 +23,7 @@
 // exit - otherwise leading the board would mean a file write per point.
 #define SAVE_INTERVAL_NS 5000000000ULL
 
-#define WINDOW_SCALE 3
+#define WINDOW_SCALE 3   // default; --scale N overrides
 #define DEBUG_SCALE  2
 
 // Analog stick travel before it counts as a direction, and trigger pull before
@@ -68,12 +68,19 @@ typedef struct {
     bool        autoplay;
     bool        godmode;
     int         start_stage;
+    int         scale;
     uint16_t    start_path;
     uint32_t    seed;
     bool        seed_set;
 
     bool     save_due;
     uint64_t last_save_ns;
+    bool     vsync_on;
+
+    // Frame-pacing telemetry, printed with --trace.
+    uint64_t frame_worst_ns;
+    int      frame_long;      // frames that overran a tick
+    int      tick_bursts;     // frames that had to run 2+ ticks
 
     // --trace: log state transitions with their tick, so a soak run can be
     // pointed at the exact moment something interesting happened.
@@ -272,6 +279,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
             app->godmode = true;
         else if (SDL_strcmp(argv[i], "--stage") == 0 && i + 1 < argc)
             app->start_stage = SDL_atoi(argv[++i]);
+        else if (SDL_strcmp(argv[i], "--scale") == 0 && i + 1 < argc)
+            app->scale = gv_clampi(SDL_atoi(argv[++i]), 1, 8);
         else if (SDL_strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             app->seed = (uint32_t)SDL_strtoul(argv[++i], nullptr, 10);
             app->seed_set = true;   // so --seed 0 means 0, not "unset"
@@ -286,16 +295,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         }
     }
 
+    const int scale = app->scale > 0 ? app->scale : WINDOW_SCALE;
     if (!SDL_CreateWindowAndRenderer("Gavaga",
-                                     GV_SCREEN_W * WINDOW_SCALE,
-                                     GV_SCREEN_H * WINDOW_SCALE,
+                                     GV_SCREEN_W * scale,
+                                     GV_SCREEN_H * scale,
                                      SDL_WINDOW_RESIZABLE,
                                      &app->win, &app->ren)) {
         SDL_Log("gavaga: could not create window/renderer: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
-    SDL_SetRenderVSync(app->ren, 1);   // best effort; the accumulator copes either way
+    app->vsync_on = SDL_SetRenderVSync(app->ren, 1);   // best effort
 
     // The whole game draws into a 224x288 playfield. INTEGER_SCALE keeps the
     // pixel grid square and sharp, letterboxing whatever is left over.
@@ -340,6 +350,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     app->last_ns     = SDL_GetTicksNS();
     app->fps_mark_ns = app->last_ns;
 
+    // Which renderer got picked matters a lot for frame pacing - a software
+    // fallback inside a VM behaves very differently from an accelerated one.
+    const char *rname = SDL_GetRendererName(app->ren);
+    SDL_Log("gavaga: renderer '%s', vsync %s",
+            rname ? rname : "?", app->vsync_on ? "on" : "off");
     SDL_Log("gavaga: %dx%d logical, logic at %.3f Hz (%llu ns/tick)",
             GV_SCREEN_W, GV_SCREEN_H, GV_TICK_HZ, (unsigned long long)GV_TICK_NS);
     return SDL_APP_CONTINUE;
@@ -468,7 +483,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
 
     const uint64_t now = SDL_GetTicksNS();
-    uint64_t delta = now - app->last_ns;
+    const uint64_t raw_delta = now - app->last_ns;   // before clamping, for telemetry
+    uint64_t delta = raw_delta;
     app->last_ns = now;
 
     // Never try to make up more than a few ticks at once: after a stall (a
@@ -502,12 +518,25 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
 
     // Rolling FPS for the debug panel.
+    // Record the raw delta: recording the clamped one only ever reports the
+    // ceiling and tells you nothing about how bad a stall really was.
+    if (raw_delta > app->frame_worst_ns) app->frame_worst_ns = raw_delta;
+    if (raw_delta > GV_TICK_NS) app->frame_long++;
+    if (ticks > 1) app->tick_bursts++;
+
     app->fps_frames++;
     const uint64_t span = now - app->fps_mark_ns;
     if (span >= 500000000ULL) {
         g->fps = (double)app->fps_frames * 1e9 / (double)span;
-        app->fps_frames  = 0;
-        app->fps_mark_ns = now;
+        if (app->trace)
+            SDL_Log("fps %5.1f  frames %3d  long %3d  bursts %3d  worst %6.2f ms",
+                    g->fps, app->fps_frames, app->frame_long, app->tick_bursts,
+                    (double)app->frame_worst_ns / 1e6);
+        app->fps_frames    = 0;
+        app->fps_mark_ns   = now;
+        app->frame_worst_ns = 0;
+        app->frame_long    = 0;
+        app->tick_bursts   = 0;
     }
 
     gv_render_frame(g, app->ren);

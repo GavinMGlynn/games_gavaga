@@ -23,8 +23,6 @@ compiler, CMake 3.28+, and the usual X11/Wayland dev headers on Linux.
 
 ## Controls
 
-| Key | |
-|---|---|
 | Keyboard | Gamepad | |
 |---|---|---|
 | ← → / A D | left stick or d-pad | move |

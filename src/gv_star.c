@@ -23,7 +23,7 @@
 
 // Star colours. Mostly cool whites and blues with a few warm ones, so the
 // field reads as depth rather than confetti.
-static const SDL_Color GV_STAR_PALETTE[8] = {
+static const SDL_Color GV_STAR_PALETTE[GV_STAR_COLORS] = {
     { 255, 255, 255, 255 },  // white
     { 200, 216, 255, 255 },  // pale blue
     { 128, 176, 255, 255 },  // blue
@@ -86,7 +86,15 @@ void gv_star_tick(gv_starfield *sf) {
     }
 }
 
+// Drawn colour-by-colour rather than star-by-star. A SetRenderDrawColor
+// between every point defeats SDL's batching, which turned this into ~250
+// draw calls a frame - fine on a desktop GPU, ruinous through a virtualised
+// OpenGL driver where each call is a round trip to the host. Bucketing by
+// palette entry makes it 8 of each, and the field is identical.
 void gv_star_draw(const gv_starfield *sf, SDL_Renderer *ren) {
+    static SDL_FPoint bucket[GV_STAR_COLORS][GV_MAX_STARS];
+    int n[GV_STAR_COLORS] = { 0 };
+
     const int off = gv_unfix(sf->scroll);
 
     for (int i = 0; i < sf->count; i++) {
@@ -97,8 +105,16 @@ void gv_star_draw(const gv_starfield *sf, SDL_Renderer *ren) {
         if (y >= GV_SCREEN_H) y -= GV_SCREEN_H;
         else if (y < 0) y += GV_SCREEN_H;
 
-        const SDL_Color c = GV_STAR_PALETTE[s->color];
-        SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, 255);
-        SDL_RenderPoint(ren, (float)s->x, (float)y);
+        const int c = s->color % GV_STAR_COLORS;
+        bucket[c][n[c]].x = (float)s->x;
+        bucket[c][n[c]].y = (float)y;
+        n[c]++;
+    }
+
+    for (int c = 0; c < GV_STAR_COLORS; c++) {
+        if (n[c] == 0) continue;
+        const SDL_Color col = GV_STAR_PALETTE[c];
+        SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, 255);
+        SDL_RenderPoints(ren, bucket[c], n[c]);
     }
 }

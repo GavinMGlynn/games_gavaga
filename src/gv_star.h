@@ -6,6 +6,7 @@
 
 #define GV_MAX_STARS  256
 #define GV_STAR_SETS  4     // blink groups, cycled to make the field twinkle
+#define GV_STAR_COLORS 8    // palette entries, and the number of batched draws
 
 typedef struct {
     int16_t x, y;      // position in the virtual field (pixels)

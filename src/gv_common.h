@@ -30,7 +30,15 @@
 
 // If we fall behind by more than this many ticks in one frame, drop the debt
 // rather than spiral.
-#define GV_MAX_CATCHUP_TICKS 5
+//
+// Measured on a VMware guest, presenting a window costs ~40 ms and stalls of
+// 200-260 ms are routine - 13 to 16 ticks in one frame. At the old cap of 5
+// the rest was thrown away, and discarded time is exactly what a lurch is.
+// A tick is nearly free next to a present (the game runs five figures of fps
+// with no window on screen), so absorbing a quarter-second stall costs
+// microseconds and keeps the game honest with the wall clock. Still bounded,
+// so a genuinely hung process cannot spiral.
+#define GV_MAX_CATCHUP_TICKS 16
 
 // ---------------------------------------------------------------------------
 // 16.16 fixed point
