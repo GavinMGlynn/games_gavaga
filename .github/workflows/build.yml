@@ -11,7 +11,7 @@ jobs:
     name: Linux (GCC 14)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -39,21 +39,23 @@ jobs:
     name: Windows x64 (MSVC)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # No -G: the runner image changes which Visual Studio it ships, so let
+      # CMake pick the newest installed one rather than naming a version.
       - name: Configure
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - name: Build
-        run: cmake --build build --config RelWithDebInfo -- /m
+        run: cmake --build build --config RelWithDebInfo --parallel
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: build/RelWithDebInfo/gavaga.exe
+          path: build/**/gavaga.exe
 
   macos:
     name: macOS (Apple Silicon)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - name: Build
