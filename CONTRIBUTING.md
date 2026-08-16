@@ -60,7 +60,12 @@ reproduce a bug or a screenshot.
 | `--trace` | log state transitions with their tick |
 | `--debug` / `--path N` | start with the overlay / path catalogue open |
 | `--shot F --shot-at T` | fast-forward to tick T, write one frame, exit |
+| `--scale N` | window size multiplier |
 | `--mute` | start silent |
+
+`--trace` also prints a frame-pacing line once a second (fps, frames that
+overran a tick, frames that had to run two or more ticks, and the worst raw
+frame time), which is how to tell a slow machine from a slow game.
 
 ## House style
 

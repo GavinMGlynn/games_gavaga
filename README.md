@@ -291,6 +291,61 @@ keeps it alive to reach later stages, and `--trace` prints state transitions
 with their tick so you can point `--shot-at` at the exact moment something
 happened. The full list is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Troubleshooting
+
+**No sound.** The attract screen is silent on purpose — press Enter to start a
+game and you should get a four-note stage jingle immediately. If a *game* is
+silent, check the startup log, which names the driver it actually opened:
+
+```
+gavaga: audio driver 'pulseaudio', 44100 Hz mono f32
+```
+
+If that line says `dummy`, or is replaced by "running silent", there is no
+device. In a VM, also check the host: a guest can look perfectly healthy —
+stream active, sink unmuted — while the hypervisor is routing the virtual sound
+card at a host output with nothing plugged into it. `M` toggles mute in game.
+
+**Gamepad not detected.** The log says so at startup:
+
+```
+gavaga: no gamepad detected (keyboard only)
+```
+
+Pads hot-plug, so connecting one later works. Under VMware you need *VM →
+Removable Devices → Connect* **and** *VM Settings → USB Controller → Show all
+USB input devices*, or the host keeps HID devices to itself and the controller
+never appears. WSL2 has no native USB passthrough at all; you would need
+`usbipd-win`.
+
+**Poor frame rate in a virtual machine.** Likely the hypervisor's display, not
+the game. `--trace` prints frame pacing once a second:
+
+```
+fps  25.4  frames 13  long 5  bursts 3  worst 261.88 ms
+```
+
+Measured on a VMware guest with an emulated SVGA adapter, same scene:
+
+| | fps |
+|---|---|
+| vsync on, opengl | 17–33 |
+| vsync off | 17–25 |
+| software renderer | 20–25 |
+| offscreen, no window on screen | 9,000–21,000 |
+
+The simulation is nearly free; almost all of it was the fixed cost of
+presenting a window, and it did not vary with window size. If `--trace` shows
+that shape — a low frame rate that ignores both vsync and renderer, and
+vanishes when nothing is on screen — the game is not what is slow. The startup
+log names the renderer, which is usually the tell:
+
+```
+gavaga: renderer 'opengl', vsync on
+```
+
+`--scale N` sizes the window if you want to try a smaller one.
+
 ## Tests
 
 ```sh
